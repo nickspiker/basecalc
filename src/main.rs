@@ -23,7 +23,6 @@ impl Token {
         }
     }
 }
-
 fn main() {
     let config = Config::builder().history_ignore_space(true).build();
 
@@ -38,7 +37,7 @@ fn main() {
     let mut results_history = Vec::new();
     let mut base = 12;
     let mut digits = 256;
-    let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32; // ensures answer int/float detection within a reasonable amount
+    let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32; // 32 ensures answer int/float detection within a reasonable amount
     let mut number = Complex::new(precision);
 
     loop {
@@ -111,35 +110,38 @@ fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
     token.operator = 1; // Defaults to clear working register and load new number.
 
     let operators = [
-        // Operators must be sorted in ASCII order
+        // (Text entry, Operator, Number of operands)
+        // Operators must be sorted in ASCII order!
         // Special operators for internal calculations:
-        // [0] - Default, no operation, will return error when parsing tokens
-        // [1] - Load.  Clears register and loads number
-        ("!", b'!'),
-        ("#abs", b'a'),
-        ("#acos", b'C'),
-        ("#asin", b'S'),
-        ("#atan", b'T'),
-        ("#cos", b'c'),
-        ("#erf", b'r'),
-        ("#exp", b'e'),
-        ("#ln", b'l'),
-        ("#sin", b's'),
-        ("#sqrt", b'q'),
-        ("#tan", b't'),
-        ("%", b'%'),
-        ("*", b'*'),
-        ("+", b'+'),
-        ("-", b'-'),
-        ("/", b'/'),
-        ("@", b'@'), // History entry
-        ("^", b'^'),
+        // ("",0, 0u8) - Default, no operation, will return error when parsing tokens
+        // ("",1, 1u8)  Clears register and loads number
+        ("!", b'!', 1u8),        // Factorial
+        ("#abs", b'a', 1u8),     // Absolute value
+        ("#acos", b'C', 1u8),    // Arc cosine
+        ("#asin", b'S', 1u8),    // Arc sine
+        ("#atan", b'T', 1u8),    // Arc tangent
+        ("#cos", b'c', 1u8),     // Cosine
+        ("#erf", b'r', 1u8),     // Error function
+        ("#exp", b'e', 1u8),     // Exponential function
+        ("#ln", b'l', 1u8),      // Natural logarithm
+        ("#sin", b's', 1u8),     // Sine
+        ("#sqrt", b'q', 1u8),    // Square root
+        ("#tan", b't', 1u8),     // Tangent
+        ("%", b'%', 2u8),        // Modulo
+        ("*", b'*', 2u8),        // Multiplication
+        ("+", b'+', 2u8),        // Addition
+        ("-", b'-', 2u8),        // Subtraction
+        ("/", b'/', 2u8),        // Division
+        (":precision", b'p', 2), // Sets precision in digits in given base plus 32 bits of padding
+        (":base", b'b', 2),      // Sets base to any base from 2 to 36
+        ("@", b'@', 2u8),        // History entry
+        ("^", b'^', 2u8),        // Exponentiation
     ];
 
     let mut index = 0;
     let mut first_symbol = true;
     while index < input.len() {
-        let mut parenthesis = false;
+        let mut complex = false;
         let mut imaginary = false;
         let mut integer = true;
         while index < input.len() {
@@ -172,7 +174,7 @@ fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
                 }
                 index += 1;
             } else if c == b',' {
-                if parenthesis {
+                if complex {
                     if token.real_integer.is_empty() && token.real_fraction.is_empty() {
                         return Err((format!("Missing real value!"), index));
                     }
@@ -186,13 +188,13 @@ fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
                     ));
                 }
             } else if c == b'[' {
-                parenthesis = true;
+                complex = true;
                 index += 1
             } else if c == b']' {
                 if token.imaginary_integer.is_empty() && token.imaginary_fraction.is_empty() {
                     return Err((format!("Missing imaginary value!"), index));
                 }
-                parenthesis = false;
+                complex = false;
                 imaginary = false;
                 integer = true;
                 index += 1
@@ -209,7 +211,7 @@ fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
             }
         }
 
-        if parenthesis {
+        if complex {
             return Err((format!("Missing closing parenthesis!"), index));
         }
         let mut low = 0;
