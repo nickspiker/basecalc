@@ -19,7 +19,7 @@ impl Token {
             operator: 0 as char,
             second_operand: true,
             real_integer: Vec::new(),
-            real_fraction: Vec::new(),
+          real_fraction: Vec::new(),
             imaginary_integer: Vec::new(),
             imaginary_fraction: Vec::new(),
             sign: (false, false),
@@ -70,7 +70,13 @@ fn main() {
                 match tokens {
                     Ok(tokens) => {
                         evaluate_tokens(&mut number, &tokens, base, precision, &mut rand_state);
-                        let result_str = num2string(&number, base, digits);
+                        let result_str;
+                        if number.real().is_finite() && number.imag().is_finite() {
+                            result_str = num2string(&number, base, digits);
+                        } else {
+                            number = Complex::with_val(precision, std::f32::NAN);
+                            result_str = "Undefined!".to_owned();
+                        }
                         number_history.push(number.clone());
                         println!("{}", &result_str);
                         rl.add_history_entry(line.as_str())
@@ -251,7 +257,8 @@ fn parse_number(
             }
             complex = true;
             index += 1
-        } else if c == b']' {if !complex {
+        } else if c == b']' {
+            if !complex {
                 return Err((format!("Missing opening brackets!"), index));
             }
             if token.imaginary_integer.is_empty() && token.imaginary_fraction.is_empty() {
@@ -279,7 +286,7 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
         // (Text entry, Operator, Number of operands)
         // Operators must be sorted in ASCII order!
         // ("", 0, true),          // Clear register and load number
-        ("!", '!', false),         // Factorial
+        ("!", '!', false),         // Gamma
         ("#abs", 'a', false),      // Absolute value
         ("#acos", 'C', false),     // Arc cosine
         ("#asin", 'S', false),     // Arc sine
@@ -287,10 +294,12 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
         ("#cos", 'c', false),      // Cosine
         ("#erf", 'r', false),      // Error function
         ("#exp", 'e', false),      // Exponential function
+        ("#imag", 'i', false),     // Imaginary portion
         ("#ln", 'l', false),       // Natural logarithm
-        ("#rand", 'r', false),     // Random
+        ("#rand", 'R', false),     // Random
+        ("#real", 'E', false),     // Real portion
         ("#sin", 's', false),      // Sine
-        ("#sqrt", 'q', false),     // Square root
+        ("#Sign",'g',false),       // Sign
         ("#tan", 't', false),      // Tangent
         ("%", '%', true),          // Modulo
         ("*", '*', true),          // Multiplication
@@ -374,34 +383,70 @@ fn evaluate_tokens(
         let token_number = token2num(token, base, precision);
         match token.operator {
             '\0' => *number = token_number.clone(),
-            'r' => {
-                *number = Complex::with_val(precision, Complex::random_cont(rand_state)) * 2
-                    - Complex::with_val(precision, (1, 1))
-            }
-            'a' => *number = number.clone().abs(), // Absolute value
-            'S' => *number = number.clone().asin(), // Arc Sine
+            '!' => {}                               // Gamma
+            'a' => *number = number.clone().abs(),  // Absolute value
             'C' => *number = number.clone().acos(), // Arc Cosine
+            'S' => *number = number.clone().asin(), // Arc Sine
             'T' => *number = number.clone().atan(), // Arc Tangent
-            's' => *number = number.clone().cos(), // Sine
-            'c' => *number = number.clone().cos(), // Cosine
-            't' => *number = number.clone().tan(), // Tangent
-            'e' => *number = number.clone().exp(), // Exponential
-            'l' => *number = number.clone().ln(),  // Natural Logarithm
-            'L' => *number = number.clone().ln(),  // Current Base Logarithm
-            'q' => *number = number.clone().sqrt(), // Square Root
-            '%' => {
-                // Modulus
+            'c' => *number = number.clone().cos(),  // Cosine
+            'r' => {}                               // Error function-----------
+            'e' => *number = number.clone().exp(),  // Exponential
+            'i' => 
+                *number =
+                    Complex::with_val(precision, (number.imag().clone(), Float::new(precision)))
+            , // Imaginary portion
+            'l' => *number = number.clone().ln(), // Natural Logarithm
+            'R' => {
+                *number = {
+                    let mut random;
+                    loop {
+                        let mut real = Float::with_val(precision, Float::random_cont(rand_state));
+                           let mut imag = Float::with_val(precision, Float::random_cont(rand_state));
+                        let mut sign = Float::new(1);
+                        sign.assign(Float::random_bits(rand_state));
+                        if sign > 0.375 {
+                            real = -real
+                        }
+                        sign.assign(Float::random_bits(rand_state));
+                        if sign > 0.375 {
+                            imag = -imag
+                        }
+                        random = Complex::with_val(precision, (real, imag));
+                        if random.clone().abs().real() < &1 {
+                            break;
+                        }
+                    }
+                    random
+                }
+            } // Random
+            'E' => {
+                *number =
+                    Complex::with_val(precision, (number.real().clone(), Float::new(precision)));
+            } // Real portion
+
+            'o' => {
+                *number = Complex::with_val(
+                    precision,
+                    (number.real().clone().round(), number.imag().clone().round()),
+                )
             }
+            's' => *number = number.clone().cos(), // Sine
+            't' => *number = number.clone().tan(), // Tangent
+            '%' => *number=number.clone()- token_number.clone() * (number.clone() / token_number ), // Modulus number % token_number
             '*' => *number *= &token_number, // Multiplication
             '+' => *number += &token_number, // Addition
             '-' => *number -= &token_number, // Subtraction
             '/' => *number /= &token_number, // Division
+            'p'=> {} // Sets precision
+            'b'=> {} // Sets base
+            '@'=> {} // History entry
             '^' => *number = number.clone().pow(&token_number), // Exponentiation
-            '!' => {
-                // Factorial is not directly supported for Complex in `rug`.
-                // You need to implement this or handle it separately.
-            }
             _ => panic!("Unknown operator!"),
+
+            'g' => *number = number.clone() / number.clone().abs(), // Sign
+
+            'L' => *number = number.clone().ln() / Float::with_val(precision, base), // Current Base Logarithm
+
         }
     }
 }
@@ -429,13 +474,17 @@ fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
         imag_frac /= base as f64;
     }
 
-    Complex::with_val(
-        precision,
-        (
-            (real_int + real_frac) * (1 - token.sign.0 as i8 * 2),
-            (imag_int + imag_frac) * (1 - token.sign.1 as i8 * 2),
-        ),
-    )
+    let mut real = Float::with_val(precision, &real_int + &real_frac);
+    let mut imaginary = Float::with_val(precision, &imag_int + &imag_frac);
+
+    if token.sign.0 {
+        real = -real;
+    }
+    if token.sign.1 {
+        imaginary = -imaginary;
+    }
+
+    Complex::with_val(precision, (real, imaginary))
 }
 
 fn num2string(num: &Complex, base: u8, digits: usize) -> String {
@@ -445,7 +494,7 @@ fn num2string(num: &Complex, base: u8, digits: usize) -> String {
     } else {
         number = format!(
             "[{} ,{} ]",
-            format_part(num.real(), base, digits),
+              format_part(num.real(), base, digits),
             format_part(num.imag(), base, digits)
         );
     };
