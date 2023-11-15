@@ -5,7 +5,8 @@ use rustyline::{
     error::ReadlineError, history::FileHistory, Cmd, Config, Editor, KeyCode, KeyEvent, Modifiers,
 };
 struct Token {
-    operator: u8,
+    operator: char,
+    second_operand: bool,
     real_integer: Vec<u8>,
     real_fraction: Vec<u8>,
     imaginary_integer: Vec<u8>,
@@ -15,7 +16,8 @@ impl Token {
     // Define a new function to create a Token instance
     fn new() -> Token {
         Token {
-            operator: 0, // Default value for operator
+            operator: 0 as char,
+            second_operand: true,
             real_integer: Vec::new(),
             real_fraction: Vec::new(),
             imaginary_integer: Vec::new(),
@@ -34,7 +36,6 @@ fn main() {
     );
 
     let mut number_history = Vec::new();
-    let mut results_history = Vec::new();
     let mut base = 12;
     let mut digits = 256;
     let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32; // 32 ensures answer int/float detection within a reasonable amount
@@ -45,25 +46,19 @@ fn main() {
         match readline {
             Ok(line) => {
                 if line.is_empty() {
-                    // Exit the loop if the input line is empty
                     break;
                 }
-                // Add input line to history
-                rl.add_history_entry(line.as_str())
-                    .expect("Unable to store result history!");
-
-                let tokens = tokenize(&line, base); // Implement tokenize function
+                let tokens = tokenize(&line, base);
                 match tokens {
                     Ok(tokens) => {
                         evaluate_tokens(&mut number, &tokens, base, precision);
-
                         let result_str = num2string(&number, base, digits);
-
                         number_history.push(number.clone());
-                        results_history.push(result_str.clone());
-
-                        // Display the result
                         println!("  {}", result_str);
+                        rl.add_history_entry(line.as_str())
+                            .expect("Unable to store entry to history!");
+                        rl.add_history_entry(result_str)
+                            .expect("Unable to store result to history!");
                     }
                     Err(e) => {
                         print!("  ");
@@ -106,223 +101,244 @@ fn main() {
 fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
     let input = input_str.as_bytes();
     let mut tokens = Vec::new();
-    let mut token = Token::new();
-    token.operator = 1; // Defaults to clear working register and load new number.
-
-    let operators = [
-        // (Text entry, Operator, Number of operands)
-        // Operators must be sorted in ASCII order!
-        // Special operators for internal calculations:
-        // ("",0, 0u8) - Default, no operation, will return error when parsing tokens
-        // ("",1, 1u8)  Clears register and loads number
-        ("!", b'!', 1u8),        // Factorial
-        ("#abs", b'a', 1u8),     // Absolute value
-        ("#acos", b'C', 1u8),    // Arc cosine
-        ("#asin", b'S', 1u8),    // Arc sine
-        ("#atan", b'T', 1u8),    // Arc tangent
-        ("#cos", b'c', 1u8),     // Cosine
-        ("#erf", b'r', 1u8),     // Error function
-        ("#exp", b'e', 1u8),     // Exponential function
-        ("#ln", b'l', 1u8),      // Natural logarithm
-        ("#sin", b's', 1u8),     // Sine
-        ("#sqrt", b'q', 1u8),    // Square root
-        ("#tan", b't', 1u8),     // Tangent
-        ("%", b'%', 2u8),        // Modulo
-        ("*", b'*', 2u8),        // Multiplication
-        ("+", b'+', 2u8),        // Addition
-        ("-", b'-', 2u8),        // Subtraction
-        ("/", b'/', 2u8),        // Division
-        (":precision", b'p', 2), // Sets precision in digits in given base plus 32 bits of padding
-        (":base", b'b', 2),      // Sets base to any base from 2 to 36
-        ("@", b'@', 2u8),        // History entry
-        ("^", b'^', 2u8),        // Exponentiation
-    ];
-
     let mut index = 0;
     let mut first_symbol = true;
     while index < input.len() {
-        let mut complex = false;
-        let mut imaginary = false;
-        let mut integer = true;
-        while index < input.len() {
-            let c = input[index];
-            if c.is_ascii_digit() || c.is_ascii_alphabetic() {
-                first_symbol = false;
-                let num;
-                if c.is_ascii_digit() {
-                    num = c - b'0';
-                } else if c.is_ascii_uppercase() {
-                    num = c - b'A' + 10;
-                } else {
-                    num = c - b'a' + 10;
-                }
-                if num >= base {
-                    return Err((format!("Invalid number!"), index));
-                }
-                if imaginary {
-                    if integer {
-                        token.imaginary_integer.push(num);
-                    } else {
-                        token.imaginary_fraction.push(num)
-                    }
-                } else {
-                    if integer {
-                        token.real_integer.push(num);
-                    } else {
-                        token.real_fraction.push(num)
-                    }
-                }
-                index += 1;
-            } else if c == b',' {
-                if complex {
-                    if token.real_integer.is_empty() && token.real_fraction.is_empty() {
-                        return Err((format!("Missing real value!"), index));
-                    }
-                    imaginary = true;
-                    integer = true;
-                    index += 1;
-                } else {
-                    return Err((
-                        format!("Commas allowed for complex number entry only!"),
-                        index,
-                    ));
-                }
-            } else if c == b'[' {
-                complex = true;
-                index += 1
-            } else if c == b']' {
-                if token.imaginary_integer.is_empty() && token.imaginary_fraction.is_empty() {
-                    return Err((format!("Missing imaginary value!"), index));
-                }
-                complex = false;
-                imaginary = false;
-                integer = true;
-                index += 1
-            } else if c == b'.' {
-                if integer {
-                    integer = false;
-                    index += 1
-                } else {
-                    return Err((format!("Multiple decimals in number!"), index));
-                }
-            } else if c != b' ' || c != b'_' || c != b'\t' {
-                // ignores whitespace
-                break;
-            }
+        let a = input[index];
+        if a == b' ' || a == b'_' || a == b'\t' {
+            index += 1;
+            continue;
         }
-
-        if complex {
-            return Err((format!("Missing closing parenthesis!"), index));
-        }
-        let mut low = 0;
-        let mut high = operators.len() - 1;
-        let mut op_index = 0;
-        if !token.real_integer.is_empty()
-            || !token.real_fraction.is_empty()
-            || !token.imaginary_integer.is_empty()
-            || !token.imaginary_fraction.is_empty()
-            || first_symbol
-        {
-            while low < high {
-                let c;
-                if index < input.len() {
-                    c = input[index]
-                } else {
-                    break;
-                }
-                loop {
-                    if op_index < operators[low].0.len() {
-                        let op_char = operators[low].0.as_bytes()[op_index];
-                        if c > op_char {
-                            low += 1;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        low += 1;
-                        if low >= operators.len() {
-                            break;
-                        }
-                    }
-                }
-                loop {
-                    if op_index < operators[high].0.len() {
-                        let op_char = operators[high].0.as_bytes()[op_index];
-                        if c < op_char {
-                            if high == 0 {
-                                break;
-                            }
-                            high -= 1;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        if high == 0 {
-                            break;
-                        }
-                        high -= 1;
-                    }
-                }
-                if low == high {
-                    if !first_symbol {
-                        tokens.push(token);
-                    }
-                    index += operators[low].0.len();
-                    token = Token::new();
-                    token.operator = operators[low].1;
-                    break;
-                }
-                op_index += 1;
-                index += 1;
-            }
-            if low != high && index < input.len() {
-                return Err((format!("Invalid operator!"), index));
+        let (mut token, new_index) = parse_operator(input, base, index)?;
+        if token.operator == 0 as char && first_symbol {
+            index = parse_number(input, &mut token, base, index)?;
+            if token.real_integer.is_empty()
+                && token.real_fraction.is_empty()
+                && token.imaginary_integer.is_empty()
+                && token.imaginary_fraction.is_empty()
+            {
+                return Err((format!("Unrecognized input!"), index));
+            } else {
+                tokens.push(token);
             }
         } else {
-            if !first_symbol {
-                return Err((format!("Invalid character!"), index));
+            index = new_index;
+            if token.second_operand {
+                let old_index = parse_number(input, &mut token, base, index)?;
+                if token.real_integer.is_empty()
+                    && token.real_fraction.is_empty()
+                    && token.imaginary_integer.is_empty()
+                    && token.imaginary_fraction.is_empty()
+                {
+                    return Err((format!("Missing operand!"), index));
+                }
+                index = old_index;
             }
+            tokens.push(token);
         }
         first_symbol = false;
     }
-    if !token.real_integer.is_empty()
-        || !token.real_fraction.is_empty()
-        || !token.imaginary_integer.is_empty()
-        || !token.imaginary_fraction.is_empty()
-    {
-        tokens.push(token);
-    } else {
-        return Err((format!("Incomplete expression!"), index));
-    }
     Ok(tokens)
 }
+fn parse_number(
+    input: &[u8],
+    token: &mut Token,
+    base: u8,
+    mut index: usize,
+) -> Result<usize, (String, usize)> {
+    let mut complex = false;
+    let mut imaginary = false;
+    let mut integer = true;
+    while index < input.len() {
+        let c = input[index];
+        if c == b' ' || c == b'_' || c == b'\t' {
+            index += 1;
+            continue;
+        }
+        if c.is_ascii_digit() || c.is_ascii_alphabetic() {
+            let num;
+            if c.is_ascii_digit() {
+                num = c - b'0';
+            } else if c.is_ascii_uppercase() {
+                num = c - b'A' + 10;
+            } else {
+                num = c - b'a' + 10;
+            }
+            if num >= base {
+                return Err((format!("Invalid number!"), index));
+            }
+            if imaginary {
+                if integer {
+                    token.imaginary_integer.push(num);
+                } else {
+                    token.imaginary_fraction.push(num)
+                }
+            } else {
+                if integer {
+                    token.real_integer.push(num);
+                } else {
+                    token.real_fraction.push(num)
+                }
+            }
+            index += 1;
+        } else if c == b',' {
+            if complex {
+                if token.real_integer.is_empty() && token.real_fraction.is_empty() {
+                    return Err((format!("Missing real value!"), index));
+                }
+                imaginary = true;
+                integer = true;
+                index += 1;
+            } else {
+                return Err((
+                    format!("Commas allowed for complex number entry only!"),
+                    index,
+                ));
+            }
+        } else if c == b'[' {
+            complex = true;
+            index += 1
+        } else if c == b']' {
+            if token.imaginary_integer.is_empty() && token.imaginary_fraction.is_empty() {
+                return Err((format!("Missing imaginary value!"), index));
+            }
+            complex = false;
+            imaginary = false;
+            integer = true;
+            index += 1
+        } else if c == b'.' {
+            if integer {
+                integer = false;
+                index += 1
+            } else {
+                return Err((format!("Multiple decimals in number!"), index));
+            }
+        } else {
+            return Ok(index);
+        }
+    }
+    if complex {
+        return Err((format!("Missing closing parenthesis!"), index));
+    }
+    Ok(index)
+}
+fn parse_operator(
+    input: &[u8],
+    base: u8,
+    mut index: usize,
+) -> Result<(Token, usize), (String, usize)> {
+    let operators = [
+        // (Text entry, Operator, Number of operands)
+        // Operators must be sorted in ASCII order!
+        // ("", 0, true),           // Clear register and load number
+        ("!", '!', false),         // Factorial
+        ("#abs", 'a', false),      // Absolute value
+        ("#acos", 'C', false),     // Arc cosine
+        ("#asin", 'S', false),     // Arc sine
+        ("#atan", 'T', false),     // Arc tangent
+        ("#cos", 'c', false),      // Cosine
+        ("#erf", 'r', false),      // Error function
+        ("#exp", 'e', false),      // Exponential function
+        ("#ln", 'l', false),       // Natural logarithm
+        ("#sin", 's', false),      // Sine
+        ("#sqrt", 'q', false),     // Square root
+        ("#tan", 't', false),      // Tangent
+        ("%", '%', true),          // Modulo
+        ("*", '*', true),          // Multiplication
+        ("+", '+', true),          // Addition
+        ("-", '-', true),          // Subtraction
+        ("/", '/', true),          // Division
+        (":precision", 'p', true), // Sets precision in digits in given base plus 32 bits of padding
+        (":base", 'b', true),      // Sets base to any base from 2 to 36
+        ("@", '@', true),          // History entry
+        ("^", '^', true),          // Exponentiation
+    ];
 
+    let mut token = Token::new();
+    let mut low = 0;
+    let mut high = operators.len() - 1;
+    let mut op_index = 0;
+
+    while low <= high {
+        let c;
+        if index < input.len() {
+            c = input[index]
+        } else {
+            break;
+        }
+        if c == b' ' || c == b'_' || c == b'\t' {
+            index += 1;
+            continue;
+        }
+        loop {
+            if op_index < operators[low].0.len() {
+                let op_char = operators[low].0.as_bytes()[op_index];
+                if c > op_char {
+                    low += 1;
+                } else {
+                    break;
+                }
+            } else {
+                low += 1;
+                if low >= operators.len() {
+                    return Err((format!("Invalid operator!"), index));
+                }
+            }
+        }
+        loop {
+            if op_index < operators[high].0.len() {
+                let op_char = operators[high].0.as_bytes()[op_index];
+                if c < op_char {
+                    if high == 0 {
+                        return Err((format!("Invalid operator!"), index));
+                    }
+                    high -= 1;
+                } else {
+                    break;
+                }
+            } else {
+                if high == 0 {
+                    break;
+                }
+                high -= 1;
+            }
+        }
+        index += 1;
+        op_index += 1;
+        if low == high && op_index == operators[low].0.len() {
+            // Found operator
+            token.operator = operators[low].1;
+            token.second_operand = operators[low].2;
+            break;
+        }
+    }
+    Ok((token, index))
+}
 fn evaluate_tokens(number: &mut Complex, tokens: &[Token], base: u8, precision: u32) {
     for token in tokens {
         let token_number = token2num(token, base, precision);
         match token.operator {
-            0 => panic!("Uninitialized operator!"),
-            1 => *number = token_number.clone(),
-            b'a' => *number = number.clone().abs(), // Absolute value
-            b'S' => *number = number.clone().asin(), // Arc Sine
-            b'C' => *number = number.clone().acos(), // Arc Cosine
-            b'T' => *number = number.clone().atan(), // Arc Tangent
-            b's' => *number = number.clone().cos(), // Sine
-            b'c' => *number = number.clone().cos(), // Cosine
-            b't' => *number = number.clone().tan(), // Tangent
-            b'e' => *number = number.clone().exp(), // Exponential
-            b'l' => *number = number.clone().ln(),  // Natural Logarithm
-            b'L' => *number = number.clone().ln(),  // Current Base Logarithm
-            b'q' => *number = number.clone().sqrt(), // Square Root
-            b'%' => {
+            '\0' => *number = token_number.clone(),
+            'a' => *number = number.clone().abs(), // Absolute value
+            'S' => *number = number.clone().asin(), // Arc Sine
+            'C' => *number = number.clone().acos(), // Arc Cosine
+            'T' => *number = number.clone().atan(), // Arc Tangent
+            's' => *number = number.clone().cos(), // Sine
+            'c' => *number = number.clone().cos(), // Cosine
+            't' => *number = number.clone().tan(), // Tangent
+            'e' => *number = number.clone().exp(), // Exponential
+            'l' => *number = number.clone().ln(),  // Natural Logarithm
+            'L' => *number = number.clone().ln(),  // Current Base Logarithm
+            'q' => *number = number.clone().sqrt(), // Square Root
+            '%' => {
                 // Modulus
             }
-            b'*' => *number *= &token_number, // Multiplication
-            b'+' => *number += &token_number, // Addition
-            b'-' => *number -= &token_number, // Subtraction
-            b'/' => *number /= &token_number, // Division
-            b'^' => *number = number.clone().pow(&token_number), // Exponentiation
-            b'!' => {
+            '*' => *number *= &token_number, // Multiplication
+            '+' => *number += &token_number, // Addition
+            '-' => *number -= &token_number, // Subtraction
+            '/' => *number /= &token_number, // Division
+            '^' => *number = number.clone().pow(&token_number), // Exponentiation
+            '!' => {
                 // Factorial is not directly supported for Complex in `rug`.
                 // You need to implement this or handle it separately.
             }
