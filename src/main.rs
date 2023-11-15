@@ -11,9 +11,9 @@ struct Token {
     real_fraction: Vec<u8>,
     imaginary_integer: Vec<u8>,
     imaginary_fraction: Vec<u8>,
+    sign: (bool, bool),
 }
 impl Token {
-    // Define a new function to create a Token instance
     fn new() -> Token {
         Token {
             operator: 0 as char,
@@ -22,6 +22,7 @@ impl Token {
             real_fraction: Vec::new(),
             imaginary_integer: Vec::new(),
             imaginary_fraction: Vec::new(),
+            sign: (false, false),
         }
     }
 }
@@ -34,12 +35,29 @@ fn main() {
         KeyEvent(KeyCode::Up, Modifiers::NONE),
         Cmd::ReverseSearchHistory,
     );
-
     let mut number_history = Vec::new();
     let mut base = 12;
-    let mut digits = 256;
+    let mut digits = 16;
     let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32; // 32 ensures answer int/float detection within a reasonable amount
     let mut number = Complex::new(precision);
+    let time = chrono::Utc::now();
+    let time1 = time.timestamp().to_le_bytes();
+    let time2 = time.timestamp_subsec_nanos().to_le_bytes();
+    let mut forhash = time1.to_vec();
+    forhash.append(&mut time2.to_vec());
+    let mut salt = vec![
+        0x1B, 0xE5, 0xAF, 0x17, 0x64, 0xAD, 0xE7, 0x7C, 0xDA, 0xC1, 0x59, 0xA9, 0xE0, 0xEF, 0x6C,
+        0x93, 0xFD, 0xED, 0xB6, 0x54, 0x47, 0x25, 0xF6, 0x89, 0x77, 0x06, 0x43, 0xE2, 0x15, 0x5E,
+        0xEE, 0x8C,
+    ];
+    forhash.append(&mut salt);
+    let mut rand_state = rand::RandState::new();
+    let mut seed = Integer::new();
+    for byte in blake3::hash(&forhash).as_bytes() {
+        seed *= 256;
+        seed += byte;
+    }
+    rand_state.seed(&seed);
 
     loop {
         let readline = rl.readline("> ");
@@ -51,10 +69,10 @@ fn main() {
                 let tokens = tokenize(&line, base);
                 match tokens {
                     Ok(tokens) => {
-                        evaluate_tokens(&mut number, &tokens, base, precision);
+                        evaluate_tokens(&mut number, &tokens, base, precision, &mut rand_state);
                         let result_str = num2string(&number, base, digits);
                         number_history.push(number.clone());
-                        println!("  {}", result_str);
+                        println!("{}", &result_str);
                         rl.add_history_entry(line.as_str())
                             .expect("Unable to store entry to history!");
                         rl.add_history_entry(result_str)
@@ -102,41 +120,47 @@ fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
     let input = input_str.as_bytes();
     let mut tokens = Vec::new();
     let mut index = 0;
-    let mut first_symbol = true;
+    while index < input.len()
+        && (input[index] == b' ' || input[index] == b'_' || input[index] == b'\t')
+    {
+        index += 1;
+    }
+    let (mut token, new_index) = parse_operator(input, index)?;
+    if token.operator != 0 as char {
+        index = new_index;
+    }
     while index < input.len() {
-        let a = input[index];
-        if a == b' ' || a == b'_' || a == b'\t' {
+        if input[index] == b' ' || input[index] == b'_' || input[index] == b'\t' {
             index += 1;
             continue;
         }
-        let (mut token, new_index) = parse_operator(input, base, index)?;
-        if token.operator == 0 as char && first_symbol {
-            index = parse_number(input, &mut token, base, index)?;
+        if token.second_operand {
+            let new_index = parse_number(input, &mut token, base, index)?;
             if token.real_integer.is_empty()
                 && token.real_fraction.is_empty()
                 && token.imaginary_integer.is_empty()
                 && token.imaginary_fraction.is_empty()
             {
-                return Err((format!("Unrecognized input!"), index));
-            } else {
-                tokens.push(token);
+                return Err((format!("Missing number!"), index));
             }
-        } else {
             index = new_index;
-            if token.second_operand {
-                let old_index = parse_number(input, &mut token, base, index)?;
-                if token.real_integer.is_empty()
-                    && token.real_fraction.is_empty()
-                    && token.imaginary_integer.is_empty()
-                    && token.imaginary_fraction.is_empty()
-                {
-                    return Err((format!("Missing operand!"), index));
-                }
-                index = old_index;
-            }
-            tokens.push(token);
         }
-        first_symbol = false;
+        tokens.push(token);
+        let (new_token, new_index) = parse_operator(input, index)?;
+        token = new_token;
+        if token.operator == 0 as char {
+            if index == input.len() {
+                break;
+            }
+            return Err((format!("Missing operator!"), index));
+        }
+        index = new_index;
+    }
+    if token.operator != 0 as char {
+        if token.second_operand {
+            return Err((format!("Missing number!"), index));
+        }
+        tokens.push(token);
     }
     Ok(tokens)
 }
@@ -149,12 +173,31 @@ fn parse_number(
     let mut complex = false;
     let mut imaginary = false;
     let mut integer = true;
+    let mut sign_check = true;
+    let mut is_negative = false;
     while index < input.len() {
-        let c = input[index];
+        let mut c = input[index];
         if c == b' ' || c == b'_' || c == b'\t' {
             index += 1;
             continue;
         }
+        if sign_check {
+            if c == b'[' {
+                if !(token.real_integer.is_empty()
+                    && token.real_fraction.is_empty()
+                    && token.imaginary_integer.is_empty()
+                    && token.imaginary_fraction.is_empty())
+                {
+                    return Err((format!("Expected operator!"), index));
+                }
+                complex = true;
+                index += 1
+            }
+            is_negative = input[index] == b'-';
+            index += is_negative as usize;
+            c = input[index];
+        }
+        sign_check = false;
         if c.is_ascii_digit() || c.is_ascii_alphabetic() {
             let num;
             if c.is_ascii_digit() {
@@ -169,12 +212,14 @@ fn parse_number(
             }
             if imaginary {
                 if integer {
+                    token.sign.1 = is_negative;
                     token.imaginary_integer.push(num);
                 } else {
                     token.imaginary_fraction.push(num)
                 }
             } else {
                 if integer {
+                    token.sign.0 = is_negative;
                     token.real_integer.push(num);
                 } else {
                     token.real_fraction.push(num)
@@ -187,6 +232,7 @@ fn parse_number(
                     return Err((format!("Missing real value!"), index));
                 }
                 imaginary = true;
+                sign_check = true;
                 integer = true;
                 index += 1;
             } else {
@@ -196,16 +242,22 @@ fn parse_number(
                 ));
             }
         } else if c == b'[' {
+            if !(token.real_integer.is_empty()
+                && token.real_fraction.is_empty()
+                && token.imaginary_integer.is_empty()
+                && token.imaginary_fraction.is_empty())
+            {
+                return Err((format!("Expected operator!"), index));
+            }
             complex = true;
             index += 1
-        } else if c == b']' {
+        } else if c == b']' {if !complex {
+                return Err((format!("Missing opening brackets!"), index));
+            }
             if token.imaginary_integer.is_empty() && token.imaginary_fraction.is_empty() {
                 return Err((format!("Missing imaginary value!"), index));
             }
-            complex = false;
-            imaginary = false;
-            integer = true;
-            index += 1
+            return Ok(index + 1);
         } else if c == b'.' {
             if integer {
                 integer = false;
@@ -218,19 +270,15 @@ fn parse_number(
         }
     }
     if complex {
-        return Err((format!("Missing closing parenthesis!"), index));
+        return Err((format!("Missing closing brackets!"), index));
     }
     Ok(index)
 }
-fn parse_operator(
-    input: &[u8],
-    base: u8,
-    mut index: usize,
-) -> Result<(Token, usize), (String, usize)> {
+fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (String, usize)> {
     let operators = [
         // (Text entry, Operator, Number of operands)
         // Operators must be sorted in ASCII order!
-        // ("", 0, true),           // Clear register and load number
+        // ("", 0, true),          // Clear register and load number
         ("!", '!', false),         // Factorial
         ("#abs", 'a', false),      // Absolute value
         ("#acos", 'C', false),     // Arc cosine
@@ -240,6 +288,7 @@ fn parse_operator(
         ("#erf", 'r', false),      // Error function
         ("#exp", 'e', false),      // Exponential function
         ("#ln", 'l', false),       // Natural logarithm
+        ("#rand", 'r', false),     // Random
         ("#sin", 's', false),      // Sine
         ("#sqrt", 'q', false),     // Square root
         ("#tan", 't', false),      // Tangent
@@ -259,7 +308,7 @@ fn parse_operator(
     let mut high = operators.len() - 1;
     let mut op_index = 0;
 
-    while low <= high {
+    while low <= high && index < input.len() {
         let c;
         if index < input.len() {
             c = input[index]
@@ -280,9 +329,9 @@ fn parse_operator(
                 }
             } else {
                 low += 1;
-                if low >= operators.len() {
-                    return Err((format!("Invalid operator!"), index));
-                }
+            }
+            if low >= operators.len() {
+                break;
             }
         }
         loop {
@@ -314,11 +363,21 @@ fn parse_operator(
     }
     Ok((token, index))
 }
-fn evaluate_tokens(number: &mut Complex, tokens: &[Token], base: u8, precision: u32) {
+fn evaluate_tokens(
+    number: &mut Complex,
+    tokens: &[Token],
+    base: u8,
+    precision: u32,
+    rand_state: &mut rug::rand::RandState,
+) {
     for token in tokens {
         let token_number = token2num(token, base, precision);
         match token.operator {
             '\0' => *number = token_number.clone(),
+            'r' => {
+                *number = Complex::with_val(precision, Complex::random_cont(rand_state)) * 2
+                    - Complex::with_val(precision, (1, 1))
+            }
             'a' => *number = number.clone().abs(), // Absolute value
             'S' => *number = number.clone().asin(), // Arc Sine
             'C' => *number = number.clone().acos(), // Arc Cosine
@@ -370,36 +429,36 @@ fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
         imag_frac /= base as f64;
     }
 
-    Complex::with_val(precision, (real_int + real_frac, imag_int + imag_frac))
+    Complex::with_val(
+        precision,
+        (
+            (real_int + real_frac) * (1 - token.sign.0 as i8 * 2),
+            (imag_int + imag_frac) * (1 - token.sign.1 as i8 * 2),
+        ),
+    )
 }
 
 fn num2string(num: &Complex, base: u8, digits: usize) -> String {
-    let mut number;
+    let number;
     if num.imag().is_zero() {
-        number = " ".to_owned();
-        number = format_part(num.real(), base, digits, number);
+        number = format!(" {}", format_part(num.real(), base, digits));
     } else {
-        number = "[".to_owned();
-        number = format_part(num.real(), base, digits, number);
-        number.push(',');
-        number = format_part(num.imag(), base, digits, number);
-        number.push(']');
+        number = format!(
+            "[{} ,{} ]",
+            format_part(num.real(), base, digits),
+            format_part(num.imag(), base, digits)
+        );
     };
     number
 }
-fn format_part(num: &rug::Float, base: u8, num_digits: usize, mut number: String) -> String {
+fn format_part(num: &rug::Float, base: u8, num_digits: usize) -> String {
     if num.is_zero() {
-        number.push_str(" 0.");
-        return number;
+        return " 0.".to_owned();
     }
-    let mut num_abs;
-    if num.is_sign_positive() {
-        num_abs = num.clone();
-        number.push(' ');
-    } else {
-        num_abs = -num.clone();
-        number.push('-');
-    }
+    let mut number = "".to_owned();
+
+    let is_positive = num.is_sign_positive();
+    let mut num_abs = num.clone().abs();
     let decimal_place = (num_abs.clone().log2() / (Float::with_val(num.prec(), base)).log2())
         .floor()
         .to_f64() as isize;
@@ -421,47 +480,53 @@ fn format_part(num: &rug::Float, base: u8, num_digits: usize, mut number: String
         if offset == 0 {
             number.push('.');
             decimal = true;
-        } else if offset % 3 == 0 {
+        } else if offset % 3 == 0 && digit_number != 0 && digit_number != num_digits - 1 {
             number.push(' ')
         }
     }
     if (num_abs - 0.5f32).abs() > 2f64.pow(-16) {
         number.push('~');
+    } else {
+        let mut index = number.len() - 1;
+        while index > 0 {
+            if number.as_bytes()[index] != b'0' && number.as_bytes()[index] != b' ' {
+                break;
+            }
+            index -= 1;
+        }
+        number.truncate(index + 1);
     }
-    if let Some(trim_pos) = number
-        .as_bytes()
-        .iter()
-        .rev()
-        .position(|&c| c != b'0' && c != b' ')
-    {
-        number.truncate(number.len() - trim_pos);
-    }
+
     if !decimal {
-        let header_length = 2;
-        let first = number.as_bytes()[header_length];
+        let first = number.as_bytes()[0];
         let is_space = first == b' ';
         if is_space {
             let mut new_number = "".to_owned();
-            new_number.push(number.as_bytes()[header_length + 1] as char);
+            new_number.push(number.as_bytes()[1] as char);
             new_number.push('.');
-            new_number.push_str(number.split_at(header_length + 2).1);
+            new_number.push_str(number.split_at(2).1);
             number = new_number;
         } else {
             let mut new_number = "".to_owned();
             new_number.push(first as char);
             new_number.push('.');
-            new_number.push_str(number.split_at(header_length + 1).1);
+            new_number.push_str(number.split_at(1).1);
             number = new_number;
         }
-        number.push(':');
+        number.push_str(" :");
         if decimal_place < 0 {
             number.push('-');
             number.push_str(&format_int((-decimal_place) as usize, base as usize));
         } else {
+            number.push(' ');
             number.push_str(&format_int(decimal_place as usize, base as usize));
         }
     }
-    number
+    if is_positive {
+        format!(" {}", number)
+    } else {
+        format!("-{}", number)
+    }
 }
 fn format_int(mut num: usize, base: usize) -> String {
     if num == 0 {

@@ -7,5 +7,7 @@ edition = "2021"
 
 [dependencies]
 az = "1.2.1"
+blake3 = "1.5.0"
+chrono = "0.4.31"
 rug = { version = "1.22.0", features = ["complex","integer"] }
 rustyline = "12.0.0"
