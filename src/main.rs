@@ -6,7 +6,7 @@ use rustyline::{
 };
 struct Token {
     operator: char,
-    second_operand: bool,
+    operands: u8,
     real_integer: Vec<u8>,
     real_fraction: Vec<u8>,
     imaginary_integer: Vec<u8>,
@@ -17,15 +17,37 @@ impl Token {
     fn new() -> Token {
         Token {
             operator: 0 as char,
-            second_operand: true,
+            operands: 0,
             real_integer: Vec::new(),
-          real_fraction: Vec::new(),
+            real_fraction: Vec::new(),
             imaginary_integer: Vec::new(),
             imaginary_fraction: Vec::new(),
             sign: (false, false),
         }
     }
 }
+trait Modulus {
+    fn modulus(&self, modulor: Complex) -> Complex;
+}
+
+impl Modulus for Complex {
+    fn modulus(&self, modulor: Complex) -> Complex {
+        let real = if modulor.real().is_zero() {
+            Float::with_val(self.real().prec(), 0) // Avoid division by zero
+        } else {
+            self.real().clone()
+                - (modulor.real().clone() * (self.real().clone() / modulor.real().clone()).floor())
+        };
+        let imaginary = if modulor.imag().is_zero() {
+            Float::with_val(self.imag().prec(), 0) // Avoid division by zero
+        } else {
+            self.imag().clone()
+                - (modulor.imag().clone() * (self.imag().clone() / modulor.imag().clone()).floor())
+        };
+        Complex::with_val(self.prec(), (real, imaginary))
+    }
+}
+
 fn main() {
     let config = Config::builder().history_ignore_space(true).build();
 
@@ -36,8 +58,8 @@ fn main() {
         Cmd::ReverseSearchHistory,
     );
     let mut number_history = Vec::new();
-    let mut base = 12;
-    let mut digits = 16;
+    let mut base = 17;
+    let mut digits = 256;
     let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32; // 32 ensures answer int/float detection within a reasonable amount
     let mut number = Complex::new(precision);
     let time = chrono::Utc::now();
@@ -126,6 +148,9 @@ fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
     let input = input_str.as_bytes();
     let mut tokens = Vec::new();
     let mut index = 0;
+    // if input[0] == b':' || input[0] == b'@' {
+    //     let (mut token, new_index) = parse_operator(input, index)?;// then parse nummber as int and check if index is at end before whitespace
+    // }
     while index < input.len()
         && (input[index] == b' ' || input[index] == b'_' || input[index] == b'\t')
     {
@@ -140,7 +165,7 @@ fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
             index += 1;
             continue;
         }
-        if token.second_operand {
+        if token.operands == 2 {
             let new_index = parse_number(input, &mut token, base, index)?;
             if token.real_integer.is_empty()
                 && token.real_fraction.is_empty()
@@ -163,7 +188,7 @@ fn tokenize(input_str: &str, base: u8) -> Result<Vec<Token>, (String, usize)> {
         index = new_index;
     }
     if token.operator != 0 as char {
-        if token.second_operand {
+        if token.operands == 2 {
             return Err((format!("Missing number!"), index));
         }
         tokens.push(token);
@@ -182,6 +207,7 @@ fn parse_number(
     let mut sign_check = true;
     let mut is_negative = false;
     while index < input.len() {
+        // add code to check operator, if base, history entry or constant, encode as integer
         let mut c = input[index];
         if c == b' ' || c == b'_' || c == b'\t' {
             index += 1;
@@ -283,33 +309,35 @@ fn parse_number(
 }
 fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (String, usize)> {
     let operators = [
-        // (Text entry, Operator, Number of operands)
-        // Operators must be sorted in ASCII order!
-        // ("", 0, true),          // Clear register and load number
-        ("!", '!', false),         // Gamma
-        ("#abs", 'a', false),      // Absolute value
-        ("#acos", 'C', false),     // Arc cosine
-        ("#asin", 'S', false),     // Arc sine
-        ("#atan", 'T', false),     // Arc tangent
-        ("#cos", 'c', false),      // Cosine
-        ("#erf", 'r', false),      // Error function
-        ("#exp", 'e', false),      // Exponential function
-        ("#imag", 'i', false),     // Imaginary portion
-        ("#ln", 'l', false),       // Natural logarithm
-        ("#rand", 'R', false),     // Random
-        ("#real", 'E', false),     // Real portion
-        ("#sin", 's', false),      // Sine
-        ("#Sign",'g',false),       // Sign
-        ("#tan", 't', false),      // Tangent
-        ("%", '%', true),          // Modulo
-        ("*", '*', true),          // Multiplication
-        ("+", '+', true),          // Addition
-        ("-", '-', true),          // Subtraction
-        ("/", '/', true),          // Division
-        (":precision", 'p', true), // Sets precision in digits in given base plus 32 bits of padding
-        (":base", 'b', true),      // Sets base to any base from 2 to 36
-        ("@", '@', true),          // History entry
-        ("^", '^', true),          // Exponentiation
+        ("#abs", 'a', 1),       // Absolute value
+        ("#acos", 'C', 1),      // Inverse cosine
+        ("#asin", 'S', 1),      // Inverse sine
+        ("#atan", 'T', 1),      // Inverse tangent
+        ("#cos", 'c', 1),       // Cosine
+        ("#im", 'i', 1),        // Imaginary
+        ("#ln", 'l', 1),        // Natural logarithm
+        ("#log", 'L', 1),       // Base logarithm
+        ("#rand", 'r', 1),      // Random
+        ("#re", 'e', 1),        // Real
+        ("#sin", 's', 1),       // Sine
+        ("#sqrt", 'q', 1),      // Square root
+        ("#tan", 't', 1),       // Tangent
+        ("%", '%', 2),          // Moduland, modular order
+        ("$", '$', 2),          // Modulor, moduland order
+        ("&", '&', 2),          // Exponentiation
+        ("*", '*', 2),          // Multiplication
+        ("+", '+', 2),          // Addition
+        ("-", '-', 2),          // Subtraction
+        ("/", '/', 2),          // Dividend divisor order
+        (":base", 'b', 0),      // Sets base to any base from 2 to 36
+        (":degrees", 'b', 0),   // Sets trig units to degrees
+        (":precision", 'p', 0), // Sets precision in digits in given base plus 32 bits of padding
+        (":radians", 'b', 0),   // Sets trig units to radians
+        ("?", '@', 0),          // History entry
+        ("@pi", 'p', 0),        // Pi
+        ("@e", 'e', 0),         // e
+        ("^", '^', 2),          // Exponentiation
+        ("\\", '\\', 2),        // Divisor dividend order
     ];
 
     let mut token = Token::new();
@@ -366,7 +394,7 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
         if low == high && op_index == operators[low].0.len() {
             // Found operator
             token.operator = operators[low].1;
-            token.second_operand = operators[low].2;
+            token.operands = operators[low].2;
             break;
         }
     }
@@ -382,73 +410,64 @@ fn evaluate_tokens(
     for token in tokens {
         let token_number = token2num(token, base, precision);
         match token.operator {
-            '\0' => *number = token_number.clone(),
-            '!' => {}                               // Gamma
+            '\0' => *number = token_number.clone(), // Clear register and load number
             'a' => *number = number.clone().abs(),  // Absolute value
-            'C' => *number = number.clone().acos(), // Arc Cosine
-            'S' => *number = number.clone().asin(), // Arc Sine
-            'T' => *number = number.clone().atan(), // Arc Tangent
+            'C' => *number = number.clone().acos(), // Inverse cosine
+            'S' => *number = number.clone().asin(), // Inverse sine
+            'T' => *number = number.clone().atan(), // Inverse tangent
             'c' => *number = number.clone().cos(),  // Cosine
-            'r' => {}                               // Error function-----------
-            'e' => *number = number.clone().exp(),  // Exponential
-            'i' => 
-                *number =
-                    Complex::with_val(precision, (number.imag().clone(), Float::new(precision)))
-            , // Imaginary portion
-            'l' => *number = number.clone().ln(), // Natural Logarithm
-            'R' => {
-                *number = {
-                    let mut random;
-                    loop {
-                        let mut real = Float::with_val(precision, Float::random_cont(rand_state));
-                           let mut imag = Float::with_val(precision, Float::random_cont(rand_state));
-                        let mut sign = Float::new(1);
-                        sign.assign(Float::random_bits(rand_state));
-                        if sign > 0.375 {
-                            real = -real
-                        }
-                        sign.assign(Float::random_bits(rand_state));
-                        if sign > 0.375 {
-                            imag = -imag
-                        }
-                        random = Complex::with_val(precision, (real, imag));
-                        if random.clone().abs().real() < &1 {
-                            break;
-                        }
-                    }
-                    random
-                }
-            } // Random
-            'E' => {
-                *number =
-                    Complex::with_val(precision, (number.real().clone(), Float::new(precision)));
-            } // Real portion
-
-            'o' => {
-                *number = Complex::with_val(
-                    precision,
-                    (number.real().clone().round(), number.imag().clone().round()),
-                )
-            }
-            's' => *number = number.clone().cos(), // Sine
-            't' => *number = number.clone().tan(), // Tangent
-            '%' => *number=number.clone()- token_number.clone() * (number.clone() / token_number ), // Modulus number % token_number
-            '*' => *number *= &token_number, // Multiplication
-            '+' => *number += &token_number, // Addition
-            '-' => *number -= &token_number, // Subtraction
-            '/' => *number /= &token_number, // Division
-            'p'=> {} // Sets precision
-            'b'=> {} // Sets base
-            '@'=> {} // History entry
+            'i' => *number = Complex::with_val(precision, (number.clone().imag(), 0)), // Imaginary
+            'l' => *number = number.clone().ln(),   // Natural logarithm
+            'L' => *number = number.clone().ln() / Float::with_val(precision, base).ln(), // Base logarithm
+            'r' => *number = generate_random(precision, rand_state),
+            'e' => *number = Complex::with_val(precision, (number.clone().real(), 0)), // Real
+            's' => *number = number.clone().sin(),                                     // Sine
+            'q' => *number = number.clone().sqrt(), // Square Root
+            't' => *number = number.clone().tan(),  // Tangent
+            '%' => *number = number.modulus(token_number), // Moduland, modular order
+            '$' => *number = token_number.modulus(number.clone()), // Modulor, moduland order
+            '&' => *number = number.clone().pow(&token_number), // Exponentiation
+            '*' => *number *= &token_number,        // Multiplication
+            '+' => *number += &token_number,        // Addition
+            '-' => *number -= &token_number,        // Subtraction
+            '/' => *number /= &token_number,        // Dividend divisor order
+            '\\' => *number = &token_number / number.clone(), // Divisor dividend order
+            //     'p' => set_precision(token, base), // Sets precision in digits in given base plus 32 bits of padding
+            //    'b' => set_base(token, base),      // Sets base to any base from 2 to Z+1
             '^' => *number = number.clone().pow(&token_number), // Exponentiation
             _ => panic!("Unknown operator!"),
-
-            'g' => *number = number.clone() / number.clone().abs(), // Sign
-
-            'L' => *number = number.clone().ln() / Float::with_val(precision, base), // Current Base Logarithm
-
         }
     }
+}
+
+fn set_precision(token: &Token, base: u8) {
+    let mut precision = 0;
+    for &digit in &token.real_integer {
+        precision *= base;
+        precision += digit;
+    }
+    for &digit in &token.real_fraction {
+        precision *= base;
+        precision += digit;
+    }
+    precision += 32;
+    //   number.set_prec(precision);
+}
+
+fn generate_random(precision: u32, rand_state: &mut rug::rand::RandState) -> Complex {
+    let real_sign = Float::with_val(1, Float::random_cont(rand_state));
+    let real = if real_sign > 0.375 {
+        Float::with_val(precision, Float::random_cont(rand_state))
+    } else {
+        -Float::with_val(precision, Float::random_cont(rand_state))
+    };
+    let imag_sign = Float::with_val(1, Float::random_cont(rand_state));
+    let imaginary = if imag_sign > 0.375 {
+        Float::with_val(precision, Float::random_cont(rand_state))
+    } else {
+        -Float::with_val(precision, Float::random_cont(rand_state))
+    };
+    Complex::with_val(precision, (real, imaginary))
 }
 
 fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
@@ -494,7 +513,7 @@ fn num2string(num: &Complex, base: u8, digits: usize) -> String {
     } else {
         number = format!(
             "[{} ,{} ]",
-              format_part(num.real(), base, digits),
+            format_part(num.real(), base, digits),
             format_part(num.imag(), base, digits)
         );
     };
