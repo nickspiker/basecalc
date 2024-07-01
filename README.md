@@ -6,18 +6,17 @@
 
 - **Support for Arbitrary Bases**: Perform calculations in any positive integer base from binary to Z+1.
 - **Complex Number Calculations**: Easily handles real and imaginary numbers.
-- **Inline Notation**: Conduct operations in a linear sequence, eliminating the need for parenthesis.
 - **High Precision**: Unrestricted digit precision for accurate and reliable results.
 - **Whitespace Ignoring**: Automatically ignores tabs, spaces, and underscores.
 - **Operator Support**: Includes all the basic numerical operations.
-- **History Tracking**: Access previous calculations with history references.
+- **History Tracking**: Access previous calculations with history references. (eventually)
 
 ## Entering Numbers
 
 Numbers can be entered in various formats, ignoring spaces, tabs, and underscores:
 
 - Decimal and Fractional: `123.45AB`, `6a8G12.9`, `.6c`, `000.A2`
-- Complex Numbers: `(123,456)`, `(real,imaginary)`
+- Complex Numbers: `[123,456]`, `[real,imaginary]`
 
 ## Operators
 
@@ -61,7 +60,3 @@ Numbers can be entered in various formats, ignoring spaces, tabs, and underscore
 - `$phi` - The golden ratio (φ).
 
 You can use these constants in your calculations just like any other number. For instance, to calculate the area of a circle with radius 5, you would input `5 + 5 * $pi`.
-
-## Inline Notation
-
-In inline notation, operations are evaluated as they appear, unlike standard notation. For example, `1+2*3` is evaluated as `1+(2*3)`.
