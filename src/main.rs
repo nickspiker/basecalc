@@ -9,8 +9,9 @@ enum Precedence {
     Lowest,
     Addition,       // + and -
     Multiplication, // * and /
-    Exponentiation, // ^ and &
+    Exponentiation, // ^
     Function,       // sin, cos, etc.
+    UnaryMinus,     // Unary -
 }
 struct Token {
     operator: char,
@@ -70,7 +71,7 @@ fn main() {
     let mut digits = 12;
     let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32; // 32 ensures answer int/float detection within a reasonable amount
     let mut radians = true;
-    let mut number = Complex::new(precision);
+    let mut number;
     let time = chrono::Utc::now();
     let time1 = time.timestamp().to_le_bytes();
     let time2 = time.timestamp_subsec_nanos().to_le_bytes();
@@ -100,8 +101,7 @@ fn main() {
                 let tokens = tokenize(&line, &mut base, &mut precision, &mut digits, &mut radians);
                 match tokens {
                     Ok(tokens) => {
-                        number =
-                            evaluate_tokens(&number, &tokens, base, precision, &mut rand_state);
+                        number = evaluate_tokens(&tokens, base, precision, &mut rand_state);
                         let result_str;
                         if number.real().is_finite() && number.imag().is_finite() {
                             result_str = num2string(&number, base, digits);
@@ -155,42 +155,96 @@ fn tokenize(
     let input = input_str.as_bytes();
     let mut tokens = Vec::new();
     let mut index = 0;
+    let mut expect_number = true;
+
     while index < input.len() {
-        if input[index] == b' ' || input[index] == b'_' || input[index] == b'\t' {
-            index += 1;
-            continue;
-        } else {
-            break;
-        }
-    }
-    if input[index] == ':' as u8 {
-        return parse_command(input, index + 1, base, precision, digits, radians);
-    }
-    while index < input.len() {
-        if input[index] == b' ' || input[index] == b'_' || input[index] == b'\t' {
+        if input[index].is_ascii_whitespace() {
             index += 1;
             continue;
         }
-        if input[index] == ':' as u8 {
-            return Err((format!(": commands must be used by themselves!"), index));
+
+        if input[index] == b':' {
+            return parse_command(input, index + 1, base, precision, digits, radians);
         }
-        let (token, new_index) = parse_operator(input, index)?;
-        if token.operator != 0 as char {
-            tokens.push(token);
-            index = new_index;
-        } else {
-            let mut number_token = Token::new();
-            let new_index = parse_number(input, &mut number_token, base.clone(), index)?;
-            if number_token.real_integer.is_empty()
-                && number_token.real_fraction.is_empty()
-                && number_token.imaginary_integer.is_empty()
-                && number_token.imaginary_fraction.is_empty()
-            {
-                return Err((format!("Missing number!"), index));
+
+        if expect_number {
+            if input[index] == b'(' {
+                tokens.push(Token {
+                    operator: '(',
+                    operands: 0,
+                    ..Token::new()
+                });
+                index += 1;
+            } else {
+                let (token, new_index) = parse_operator(input, index)?;
+                if token.operator != 0 as char {
+                    if token.operands == 1 || token.operands == 0 {
+                        // Unary operator or constant
+                        let is_constant = token.operands == 0;
+                        tokens.push(token);
+                        index = new_index;
+                        if is_constant {
+                            expect_number = false;
+                        }
+                    } else {
+                        return Err((format!("Expected number, found operator"), index));
+                    }
+                } else {
+                    let mut number_token = Token::new();
+                    let new_index = parse_number(input, &mut number_token, base.clone(), index)?;
+                    if number_token.real_integer.is_empty()
+                        && number_token.real_fraction.is_empty()
+                        && number_token.imaginary_integer.is_empty()
+                        && number_token.imaginary_fraction.is_empty()
+                    {
+                        return Err((format!("Missing number!"), index));
+                    }
+                    tokens.push(number_token);
+                    expect_number = false;
+                    index = new_index;
+                }
             }
-            tokens.push(number_token);
-            index = new_index;
+        } else {
+            if input[index] == b')' {
+                tokens.push(Token {
+                    operator: ')',
+                    operands: 0,
+                    ..Token::new()
+                });
+                index += 1;
+                expect_number = false;
+            } else {
+                let (token, new_index) = parse_operator(input, index)?;
+                if token.operator != 0 as char {
+                    if token.operands == 2 {
+                        tokens.push(token);
+                        expect_number = true;
+                        index = new_index;
+                    } else {
+                        return Err((
+                            format!("Expected binary operator, found unary operator or constant"),
+                            index,
+                        ));
+                    }
+                } else {
+                    // Implicit multiplication (e.g., 2(3+4) or 2@pi)
+                    let mut times_token = Token::new();
+                    times_token.operator = '*';
+                    times_token.operands = 2;
+                    tokens.push(times_token);
+                    expect_number = true;
+                }
+            }
         }
+    }
+
+    if tokens.is_empty() {
+        return Err((format!("Empty expression"), 0));
+    }
+
+    let last_token = tokens.last().unwrap();
+    if last_token.operator != 0 as char && last_token.operands > 0 {
+        return Err((format!("Incomplete expression"), input.len()));
     }
 
     Ok(tokens)
@@ -308,6 +362,7 @@ fn parse_number(
 }
 fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (String, usize)> {
     let operators = [
+        // ("operator", 'operator symbol', operands)
         ("#abs", 'a', 1),  // Absolute value
         ("#acos", 'C', 1), // Inverse cosine
         ("#asin", 'S', 1), // Inverse sine
@@ -316,7 +371,6 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
         ("#im", 'i', 1),   // Imaginary
         ("#ln", 'l', 1),   // Natural logarithm
         ("#log", 'L', 1),  // Base logarithm
-        ("#rand", 'r', 1), // Random
         ("#re", 'e', 1),   // Real
         ("#sin", 's', 1),  // Sine
         ("#sqrt", 'q', 1), // Square root
@@ -328,8 +382,11 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
         ("/", '/', 2),     // Division
         ("?", '@', 0),     // History entry
         ("@pi", 'p', 0),   // Pi
-        ("@e", 'e', 0),    // e
+        ("@e", 'E', 0),    // e (Euler's number)
+        ("@rand", 'r', 0), // Random
         ("^", '^', 2),     // Exponentiation
+        ("(", '(', 0),     // Left parenthesis
+        (")", ')', 0),     // Right parenthesis
     ];
 
     let mut token = Token::new();
@@ -338,59 +395,64 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
     let mut op_index = 0;
 
     while low <= high && index < input.len() {
-        let c;
-        if index < input.len() {
-            c = input[index]
-        } else {
-            break;
-        }
-        if c == b' ' || c == b'_' || c == b'\t' {
+        let c = input[index] as char;
+        if c.is_whitespace() {
             index += 1;
             continue;
         }
-        loop {
-            if op_index < operators[low].0.len() {
-                let op_char = operators[low].0.as_bytes()[op_index];
-                if c > op_char {
-                    low += 1;
-                } else {
-                    break;
-                }
-            } else {
+
+        while low < operators.len() && op_index < operators[low].0.len() {
+            let op_char = operators[low].0.as_bytes()[op_index] as char;
+            if c > op_char {
                 low += 1;
-            }
-            if low >= operators.len() {
+            } else {
                 break;
             }
         }
-        loop {
-            if op_index < operators[high].0.len() {
-                let op_char = operators[high].0.as_bytes()[op_index];
-                if c < op_char {
-                    if high == 0 {
-                        return Err((format!("Invalid operator!"), index));
-                    }
-                    high -= 1;
-                } else {
-                    break;
-                }
-            } else {
-                if high == 0 {
-                    break;
-                }
+
+        while high > 0 && op_index < operators[high].0.len() {
+            let op_char = operators[high].0.as_bytes()[op_index] as char;
+            if c < op_char {
                 high -= 1;
+            } else {
+                break;
             }
         }
+
+        if low > high {
+            break;
+        }
+
         index += 1;
         op_index += 1;
+
         if low == high && op_index == operators[low].0.len() {
             // Found operator
             token.operator = operators[low].1;
             token.operands = operators[low].2;
+
+            // Special handling for constants and parentheses
+            match operators[low].0 {
+                "@pi" | "@e" | "@rand" => {
+                    // Treat constants as numbers (operands = 0)
+                    token.operands = 0;
+                }
+                "(" | ")" => {
+                    // Parentheses are special cases, handle accordingly
+                    token.operands = 0;
+                }
+                _ => {}
+            }
+
             break;
         }
     }
-    Ok((token, index))
+
+    if token.operator == 0 as char {
+        Ok((token, index))
+    } else {
+        Ok((token, index))
+    }
 }
 fn parse_command(
     input: &[u8],
@@ -498,7 +560,6 @@ fn parse_command(
     Err((message, std::usize::MAX))
 }
 fn evaluate_tokens(
-    prev_result: &Complex,
     tokens: &[Token],
     base: u8,
     precision: u32,
@@ -507,42 +568,64 @@ fn evaluate_tokens(
     let mut output_queue: Vec<Complex> = Vec::new();
     let mut operator_stack: Vec<char> = Vec::new();
 
-    // If the first token is an operator, use the previous result
-    let mut use_prev_result = tokens.first().map_or(false, |t| t.operator != '\0');
-
     for token in tokens {
         if token.operator == '\0' {
             // It's a number, push it to the output queue
             output_queue.push(token2num(token, base, precision));
-            use_prev_result = false;
         } else {
-            // It's an operator
-            if use_prev_result {
-                output_queue.push(prev_result.clone());
-                use_prev_result = false;
-            }
-            while !operator_stack.is_empty()
-                && get_precedence(*operator_stack.last().unwrap()) >= get_precedence(token.operator)
-            {
-                apply_operator(
-                    &mut output_queue,
-                    operator_stack.pop().unwrap(),
+            match token.operator {
+                '(' => operator_stack.push('('),
+                ')' => {
+                    while let Some(&op) = operator_stack.last() {
+                        if op == '(' {
+                            break;
+                        }
+                        apply_operator(
+                            &mut output_queue,
+                            operator_stack.pop().unwrap(),
+                            precision,
+                            rand_state,
+                            base,
+                        );
+                    }
+                    if operator_stack.pop() != Some('(') {
+                        panic!("Mismatched parentheses");
+                    }
+                }
+                'p' => output_queue.push(Complex::with_val(
                     precision,
-                    rand_state,
-                    base,
-                );
+                    rug::Float::with_val(precision, rug::float::Constant::Pi),
+                )),
+                'E' => output_queue.push(Complex::with_val(
+                    precision,
+                    rug::Float::with_val(precision, rug::float::Constant::Euler),
+                )),
+                'r' => output_queue.push(generate_random(precision, rand_state)),
+                _ => {
+                    while !operator_stack.is_empty()
+                        && get_precedence(*operator_stack.last().unwrap())
+                            >= get_precedence(token.operator)
+                        && *operator_stack.last().unwrap() != '('
+                    {
+                        apply_operator(
+                            &mut output_queue,
+                            operator_stack.pop().unwrap(),
+                            precision,
+                            rand_state,
+                            base,
+                        );
+                    }
+                    operator_stack.push(token.operator);
+                }
             }
-            operator_stack.push(token.operator);
         }
-    }
-
-    // If we only have operators, use the previous result
-    if output_queue.is_empty() && !operator_stack.is_empty() {
-        output_queue.push(prev_result.clone());
     }
 
     // Apply any remaining operators
     while let Some(op) = operator_stack.pop() {
+        if op == '(' || op == ')' {
+            panic!("Mismatched parentheses");
+        }
         apply_operator(&mut output_queue, op, precision, rand_state, base);
     }
 
@@ -558,6 +641,12 @@ fn apply_operator(
     base: u8,
 ) {
     match op {
+        'n' => {
+            // Unary negation
+            if let Some(operand) = output_queue.pop() {
+                output_queue.push(-operand);
+            }
+        }
         'a' | 'C' | 'S' | 'T' | 'c' | 'i' | 'l' | 'L' | 'r' | 'e' | 's' | 'q' | 't' => {
             if let Some(operand) = output_queue.pop() {
                 let result = match op {
@@ -603,6 +692,7 @@ fn get_precedence(op: char) -> Precedence {
         'a' | 'C' | 'S' | 'T' | 'c' | 'i' | 'l' | 'L' | 'r' | 'e' | 's' | 'q' | 't' => {
             Precedence::Function
         }
+        'n' => Precedence::UnaryMinus,
         _ => Precedence::Lowest,
     }
 }
