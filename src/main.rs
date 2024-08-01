@@ -1,18 +1,97 @@
 use az::Cast;
 use rug::ops::*;
 use rug::*;
-use rustyline::{
-    error::ReadlineError, history::FileHistory, Cmd, Config, Editor, KeyCode, KeyEvent, Modifiers,
-};
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+use rustyline::{error::ReadlineError, Config, DefaultEditor, Editor};
+use std::sync::atomic::{AtomicBool, Ordering};
+struct HistoryEntry {
+    command: String,
+    result: String,
+}
+
+fn main() -> rustyline::Result<()> {
+    let config = Config::builder().build();
+    let mut rl = DefaultEditor::with_config(config)?;
+    let mut custom_history: Vec<HistoryEntry> = Vec::new();
+
+    let mut base = 10;
+    let mut digits = 12;
+    let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32;
+    let mut radians = true;
+    let mut rand_state = rand::RandState::new();
+
+    loop {
+        let readline = rl.readline("> ");
+        match readline {
+            Ok(line) => {
+                if line.is_empty() {
+                    println!("Goodbye!");
+                    break;
+                }
+
+                if line.starts_with(":debug") {
+                    if DEBUG.load(Ordering::Relaxed) {
+                        println!("Debug disabled");
+                    } else {
+                        println!("Debug enabled");
+                    }
+                    DEBUG.fetch_xor(true, Ordering::Relaxed);
+                    continue;
+                }
+
+                debug_println(&format!("Processing input: '{}'", line));
+                match tokenize(&line, &mut base, &mut precision, &mut digits, &mut radians) {
+                    Ok(tokens) => {
+                        debug_println(&format!("Tokens: {:?}", tokens));
+                        let result =
+                            evaluate_tokens(&tokens, base, precision, &mut rand_state, radians);
+                        let result_str = num2string(&result, base, digits);
+                        println!("{}", result_str);
+
+                        custom_history.push(HistoryEntry {
+                            command: line.clone(),
+                            result: result_str,
+                        });
+                        rl.add_history_entry(line.clone())?;
+                        debug_println(&format!("Added to history: {}", line));
+                    }
+                    Err((msg, pos)) => {
+                        if pos == std::usize::MAX {
+                            println!("{}", msg);
+                        } else {
+                            println!("{}\n{}^", line, " ".repeat(pos));
+                            println!("Error: {}", msg);
+                        }
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("CTRL-D");
+                break;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+static DEBUG: AtomicBool = AtomicBool::new(false);
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Precedence {
     Lowest,
     Addition,       // + and -
     Multiplication, // * and /
     Exponentiation, // ^
-    Function,       // sin, cos, etc.
-    UnaryMinus,     // Unary -
+    UnaryOperator,  // Unary -, functions, etc.
+    Highest,        // Parentheses
 }
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Token {
     operator: char,
     operands: u8,
@@ -57,94 +136,6 @@ impl Modulus for Complex {
     }
 }
 
-fn main() {
-    let config = Config::builder().history_ignore_space(true).build();
-
-    let mut rl = Editor::<(), FileHistory>::with_config(config).expect("Failed to create editor");
-    // Bind up arrow to reverse search
-    rl.bind_sequence(
-        KeyEvent(KeyCode::Up, Modifiers::NONE),
-        Cmd::ReverseSearchHistory,
-    );
-    let mut number_history = Vec::new();
-    let mut base = 10;
-    let mut digits = 12;
-    let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32; // 32 ensures answer int/float detection within a reasonable amount
-    let mut radians = true;
-    let mut number;
-    let time = chrono::Utc::now();
-    let time1 = time.timestamp().to_le_bytes();
-    let time2 = time.timestamp_subsec_nanos().to_le_bytes();
-    let mut forhash = time1.to_vec();
-    forhash.append(&mut time2.to_vec());
-    let mut salt = vec![
-        0x1B, 0xE5, 0xAF, 0x17, 0x64, 0xAD, 0xE7, 0x7C, 0xDA, 0xC1, 0x59, 0xA9, 0xE0, 0xEF, 0x6C,
-        0x93, 0xFD, 0xED, 0xB6, 0x54, 0x47, 0x25, 0xF6, 0x89, 0x77, 0x06, 0x43, 0xE2, 0x15, 0x5E,
-        0xEE, 0x8C,
-    ];
-    forhash.append(&mut salt);
-    let mut rand_state = rand::RandState::new();
-    let mut seed = Integer::new();
-    for byte in blake3::hash(&forhash).as_bytes() {
-        seed *= 256;
-        seed += byte;
-    }
-    rand_state.seed(&seed);
-
-    loop {
-        let readline = rl.readline("> ");
-        match readline {
-            Ok(line) => {
-                if line.is_empty() {
-                    break;
-                }
-                let tokens = tokenize(&line, &mut base, &mut precision, &mut digits, &mut radians);
-                match tokens {
-                    Ok(tokens) => {
-                        number = evaluate_tokens(&tokens, base, precision, &mut rand_state);
-                        let result_str;
-                        if number.real().is_finite() && number.imag().is_finite() {
-                            result_str = num2string(&number, base, digits);
-                        } else {
-                            number = Complex::with_val(precision, std::f32::NAN);
-                            result_str = "Undefined!".to_owned();
-                        }
-                        number_history.push(number.clone());
-                        println!("{}", &result_str);
-                        rl.add_history_entry(line.as_str())
-                            .expect("Unable to store entry to history!");
-                        rl.add_history_entry(result_str)
-                            .expect("Unable to store result to history!");
-                    }
-                    Err(e) => {
-                        if e.1 == std::usize::MAX {
-                            println!("{}", e.0);
-                        } else {
-                            print!("  ");
-                            for _ in 0..e.1 {
-                                print!(" ")
-                            }
-                            println!("^");
-                            println!("Error: {}", e.0);
-                        }
-                    }
-                }
-            }
-            Err(ReadlineError::Interrupted) => {
-                println!("You can always press enter with no input to exit the program");
-                break;
-            }
-            Err(ReadlineError::Eof) => {
-                println!("CTRL-D. Exiting program.");
-                break;
-            }
-            Err(err) => {
-                println!("Error: {:?}", err);
-                break;
-            }
-        }
-    }
-}
 fn tokenize(
     input_str: &str,
     base: &mut u8,
@@ -152,10 +143,12 @@ fn tokenize(
     digits: &mut usize,
     radians: &mut bool,
 ) -> Result<Vec<Token>, (String, usize)> {
+    debug_println(&format!("Tokenizing: {}", input_str));
     let input = input_str.as_bytes();
     let mut tokens = Vec::new();
     let mut index = 0;
-    let mut expect_number = true;
+    let mut expect_value = true;
+    let mut paren_count = 0;
 
     while index < input.len() {
         if input[index].is_ascii_whitespace() {
@@ -167,40 +160,45 @@ fn tokenize(
             return parse_command(input, index + 1, base, precision, digits, radians);
         }
 
-        if expect_number {
+        if expect_value {
             if input[index] == b'(' {
                 tokens.push(Token {
                     operator: '(',
                     operands: 0,
                     ..Token::new()
                 });
+                paren_count += 1;
                 index += 1;
-            } else {
+            } else if input[index] == b'-' {
+                tokens.push(Token {
+                    operator: 'n', // 'n' for unary minus
+                    operands: 1,
+                    ..Token::new()
+                });
+                index += 1;
+            } else if input[index] == b'#' {
                 let (token, new_index) = parse_operator(input, index)?;
-                if token.operator != 0 as char {
-                    if token.operands == 1 || token.operands == 0 {
-                        // Unary operator or constant
-                        let is_constant = token.operands == 0;
-                        tokens.push(token);
-                        index = new_index;
-                        if is_constant {
-                            expect_number = false;
-                        }
-                    } else {
-                        return Err((format!("Expected number, found operator"), index));
-                    }
-                } else {
-                    let mut number_token = Token::new();
-                    let new_index = parse_number(input, &mut number_token, base.clone(), index)?;
-                    if number_token.real_integer.is_empty()
-                        && number_token.real_fraction.is_empty()
-                        && number_token.imaginary_integer.is_empty()
-                        && number_token.imaginary_fraction.is_empty()
-                    {
-                        return Err((format!("Missing number!"), index));
-                    }
+                tokens.push(token);
+                index = new_index;
+            } else {
+                let mut number_token = Token::new();
+                let new_index = parse_number(input, &mut number_token, base.clone(), index)?;
+                debug_println(&format!("Parsed number token: {:?}", number_token));
+
+                if number_token.operator != '\0' {
+                    // This is a special number (@pi, @e, etc.)
                     tokens.push(number_token);
-                    expect_number = false;
+                    expect_value = false;
+                    index = new_index;
+                } else if number_token.real_integer.is_empty()
+                    && number_token.real_fraction.is_empty()
+                    && number_token.imaginary_integer.is_empty()
+                    && number_token.imaginary_fraction.is_empty()
+                {
+                    return Err((format!("Expected number or operator!"), index));
+                } else {
+                    tokens.push(number_token);
+                    expect_value = false;
                     index = new_index;
                 }
             }
@@ -211,31 +209,23 @@ fn tokenize(
                     operands: 0,
                     ..Token::new()
                 });
+                paren_count -= 1;
                 index += 1;
-                expect_number = false;
             } else {
                 let (token, new_index) = parse_operator(input, index)?;
                 if token.operator != 0 as char {
-                    if token.operands == 2 {
-                        tokens.push(token);
-                        expect_number = true;
-                        index = new_index;
-                    } else {
-                        return Err((
-                            format!("Expected binary operator, found unary operator or constant"),
-                            index,
-                        ));
-                    }
+                    tokens.push(token);
+                    index = new_index;
+                    expect_value = true;
                 } else {
-                    // Implicit multiplication (e.g., 2(3+4) or 2@pi)
-                    let mut times_token = Token::new();
-                    times_token.operator = '*';
-                    times_token.operands = 2;
-                    tokens.push(times_token);
-                    expect_number = true;
+                    return Err((format!("Expected operator!"), index));
                 }
             }
         }
+    }
+
+    if paren_count != 0 {
+        return Err((format!("Mismatched parentheses!"), input.len()));
     }
 
     if tokens.is_empty() {
@@ -247,6 +237,10 @@ fn tokenize(
         return Err((format!("Incomplete expression"), input.len()));
     }
 
+    for token in &tokens {
+        debug_println(&format!("Token: {:?}", token));
+    }
+
     Ok(tokens)
 }
 fn parse_number(
@@ -255,17 +249,38 @@ fn parse_number(
     base: u8,
     mut index: usize,
 ) -> Result<usize, (String, usize)> {
+    let numbers = [
+        // ("operator", 'operator symbol', operands)
+        ("@e", 'E', 0),     // e (Euler's number)
+        ("@gamma", 'G', 0), // γ Euler-Mascheroni
+        ("@grand", 'g', 0), // Gaussian random
+        ("@pi", 'p', 0),    // Pi
+        ("@rand", 'r', 0),  // Random
+    ];
     let mut complex = false;
     let mut imaginary = false;
     let mut integer = true;
     let mut sign_check = true;
     let mut is_negative = false;
+    let mut first_char = true;
     while index < input.len() {
         let mut c = input[index];
         if c == b' ' || c == b'_' || c == b'\t' {
             index += 1;
             continue;
         }
+        if first_char && c == b'@' {
+            for &(num_str, op_char, _) in &numbers {
+                if input[index..].starts_with(num_str.as_bytes()) {
+                    debug_println(&format!("Found number: {}", num_str));
+                    token.operator = op_char;
+                    index += num_str.len();
+                    return Ok(index);
+                }
+            }
+            return Err((format!("Invalid @number!"), index));
+        }
+        first_char = false;
         if sign_check {
             if c == b'[' {
                 if !(token.real_integer.is_empty()
@@ -380,79 +395,24 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
         ("+", '+', 2),     // Addition
         ("-", '-', 2),     // Subtraction
         ("/", '/', 2),     // Division
-        ("?", '@', 0),     // History entry
-        ("@pi", 'p', 0),   // Pi
-        ("@e", 'E', 0),    // e (Euler's number)
-        ("@rand", 'r', 0), // Random
         ("^", '^', 2),     // Exponentiation
         ("(", '(', 0),     // Left parenthesis
         (")", ')', 0),     // Right parenthesis
     ];
-
     let mut token = Token::new();
-    let mut low = 0;
-    let mut high = operators.len() - 1;
-    let mut op_index = 0;
 
-    while low <= high && index < input.len() {
-        let c = input[index] as char;
-        if c.is_whitespace() {
-            index += 1;
-            continue;
-        }
-
-        while low < operators.len() && op_index < operators[low].0.len() {
-            let op_char = operators[low].0.as_bytes()[op_index] as char;
-            if c > op_char {
-                low += 1;
-            } else {
-                break;
+    if index < input.len() {
+        for &(op_str, op_char, operands) in &operators {
+            if input[index..].starts_with(op_str.as_bytes()) {
+                token.operator = op_char;
+                token.operands = operands;
+                index += op_str.len();
+                return Ok((token, index));
             }
-        }
-
-        while high > 0 && op_index < operators[high].0.len() {
-            let op_char = operators[high].0.as_bytes()[op_index] as char;
-            if c < op_char {
-                high -= 1;
-            } else {
-                break;
-            }
-        }
-
-        if low > high {
-            break;
-        }
-
-        index += 1;
-        op_index += 1;
-
-        if low == high && op_index == operators[low].0.len() {
-            // Found operator
-            token.operator = operators[low].1;
-            token.operands = operators[low].2;
-
-            // Special handling for constants and parentheses
-            match operators[low].0 {
-                "@pi" | "@e" | "@rand" => {
-                    // Treat constants as numbers (operands = 0)
-                    token.operands = 0;
-                }
-                "(" | ")" => {
-                    // Parentheses are special cases, handle accordingly
-                    token.operands = 0;
-                }
-                _ => {}
-            }
-
-            break;
         }
     }
 
-    if token.operator == 0 as char {
-        Ok((token, index))
-    } else {
-        Ok((token, index))
-    }
+    Ok((token, index))
 }
 fn parse_command(
     input: &[u8],
@@ -464,6 +424,10 @@ fn parse_command(
 ) -> Result<Vec<Token>, (String, usize)> {
     let message;
     match &input[index..] {
+        s if s.eq_ignore_ascii_case(b"test") => {
+            let (passed, total) = run_tests();
+            message = format!("{}/{} tests passed.", passed, total);
+        }
         s if s.len() >= 4 && s[..4].eq_ignore_ascii_case(b"base") => {
             index += 4;
             // Skip whitespace
@@ -489,17 +453,30 @@ fn parse_command(
             };
             if new_base == 1 || new_base > 36 {
                 return Err((
-                    format!("Base must be a single digit!\nUse ':base 0' for base Z+1"),
+                    format!("Base must be between 2 and 36!\nUse ':base 0' for base 36 (Z+1)"),
                     index,
                 ));
             }
-            if new_base == 0 {
-                *base = 36;
-                message = format!("Base set to Z+1.");
-            } else {
-                *base = new_base;
-                message = format!("Base set to {}.", (digit as char).to_uppercase());
-            }
+            *base = if new_base == 0 { 36 } else { new_base };
+
+            let base_char = match *base {
+                0..=9 => (*base as u8 + b'0') as char,
+                10..=35 => (*base as u8 - 10 + b'A') as char,
+                36 => 'Z',
+                _ => '?',
+            };
+
+            message = match get_base_name(*base) {
+                Some(name) => {
+                    if *base == 36 {
+                        format!("Base set to {} (Z+1).", name)
+                    } else {
+                        format!("Base set to {} ({}).", name, base_char)
+                    }
+                }
+                None => format!("Base set to {}, unsupported base name.", base_char),
+            };
+
             *precision = (*digits as f64 * (new_base as f64).log2()).ceil() as u32 + 32;
 
             // Check for any trailing characters
@@ -514,7 +491,6 @@ fn parse_command(
         s if s.len() >= 9 && s[..9].eq_ignore_ascii_case(b"precision") => {
             let mut token = Token::new();
             index = parse_number(input, &mut token, base.clone(), index + 9)?;
-
             // Check if there's anything after the number
             if index < input.len() {
                 for i in index..input.len() {
@@ -532,7 +508,10 @@ fn parse_command(
 
             *digits = value;
             *precision = (*digits as f64 * (*base as f64).log2()).ceil() as u32 + 32;
-            message = format!("Precision set to {} digits.", value);
+            message = format!(
+                "Precision set to {} digits.",
+                format_int(value, *base as usize)
+            );
         }
         s if s.len() >= 7 && s[..7].eq_ignore_ascii_case(b"degrees") => {
             // Check if there's anything after the command
@@ -554,24 +533,149 @@ fn parse_command(
             *radians = true;
             message = format!("Angle units set to radians.");
         }
+        s if s.len() >= 5 && s[..5].eq_ignore_ascii_case(b"debug") => {
+            // Toggle debug mode
+            let new_state = !DEBUG.load(Ordering::Relaxed);
+            DEBUG.store(new_state, Ordering::Relaxed);
+            message = format!("Debug {}", if new_state { "enabled" } else { "disabled" });
+        }
         _ => return Err((format!("Unknown command!"), index)),
     };
 
     Err((message, std::usize::MAX))
 }
+fn apply_operator(
+    output_queue: &mut Vec<Complex>,
+    op: char,
+    precision: u32,
+    rand_state: &mut rug::rand::RandState,
+    base: u8,
+    radians: bool,
+) {
+    debug_println(&format!("Applying operator: {}", op));
+    match op {
+        'E' => output_queue.push(Complex::with_val(
+            precision,
+            Float::with_val(precision, 1).exp(),
+        )),
+        'G' => output_queue.push(Complex::with_val(precision, rug::float::Constant::Euler)),
+        'p' => output_queue.push(Complex::with_val(precision, rug::float::Constant::Pi)),
+        'r' => output_queue.push(generate_random(precision, rand_state)),
+        'g' => output_queue.push(gaussian_complex_random(precision, rand_state)),
+        'n' => {
+            // Unary negation
+            if let Some(operand) = output_queue.pop() {
+                debug_println(&format!("Result after operation: {:?}", -operand.clone()));
+                output_queue.push(-operand);
+            }
+        }
+        'a' | 'C' | 'S' | 'T' | 'c' | 'i' | 'l' | 'L' | 'e' | 's' | 'q' | 't' => {
+            if let Some(operand) = output_queue.pop() {
+                let result = if radians {
+                    match op {
+                        'a' => operand.abs(),
+                        'C' => operand.acos(),
+                        'S' => operand.asin(),
+                        'T' => operand.atan(),
+                        'c' => operand.cos(),
+                        'i' => Complex::with_val(precision, (operand.imag(), 0)),
+                        'l' => operand.ln(),
+                        'L' => operand.ln() / Float::with_val(precision, base).ln(),
+                        'e' => Complex::with_val(precision, (operand.real(), 0)),
+                        's' => operand.sin(),
+                        'q' => operand.sqrt(),
+                        't' => operand.tan(),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    let pi = Float::with_val(precision, rug::float::Constant::Pi);
+                    match op {
+                        'a' => operand.abs(),
+                        'C' => {
+                            let rad_result = operand.acos();
+                            rad_result * 180.0 / pi
+                        }
+                        'S' => {
+                            let rad_result = operand.asin();
+                            rad_result * 180.0 / pi
+                        }
+                        'T' => {
+                            let rad_result = operand.atan();
+                            rad_result * 180.0 / pi
+                        }
+                        'c' => {
+                            let rad_operand: Complex = operand * pi / 180.0;
+                            rad_operand.cos()
+                        }
+                        'i' => Complex::with_val(precision, (operand.imag(), 0)),
+                        'l' => operand.ln(),
+                        'L' => operand.ln() / Float::with_val(precision, base).ln(),
+                        'e' => Complex::with_val(precision, (operand.real(), 0)),
+                        's' => {
+                            let rad_operand: Complex = operand * pi / 180.0;
+                            rad_operand.sin()
+                        }
+                        'q' => operand.sqrt(),
+                        't' => {
+                            let rad_operand: Complex = operand * pi / 180.0;
+                            rad_operand.tan()
+                        }
+                        _ => unreachable!(),
+                    }
+                };
+                debug_println(&format!("Result after operation: {:?}", result));
+                output_queue.push(result);
+            }
+        }
+        _ => {
+            if let (Some(b), Some(a)) = (output_queue.pop(), output_queue.pop()) {
+                let result = match op {
+                    '%' => a.modulus(b),
+                    '^' => a.pow(&b),
+                    '*' => a * b,
+                    '+' => a + b,
+                    '-' => a - b,
+                    '/' => a / b,
+                    _ => panic!("Unknown operator: {}", op),
+                };
+                debug_println(&format!("Result after operation: {:?}", result));
+                output_queue.push(result);
+            }
+        }
+    }
+}
+
 fn evaluate_tokens(
     tokens: &[Token],
     base: u8,
     precision: u32,
     rand_state: &mut rug::rand::RandState,
+    radians: bool,
 ) -> Complex {
     let mut output_queue: Vec<Complex> = Vec::new();
     let mut operator_stack: Vec<char> = Vec::new();
 
     for token in tokens {
+        debug_println(&format!("Processing token: {:?}", token));
         if token.operator == '\0' {
-            // It's a number, push it to the output queue
-            output_queue.push(token2num(token, base, precision));
+            let value = token2num(token, base, precision);
+            debug_println(&format!("  Pushed number: {}", value));
+            output_queue.push(value);
+        } else if token.operator == 'E'
+            || token.operator == 'G'
+            || token.operator == 'p'
+            || token.operator == 'r'
+            || token.operator == 'g'
+        {
+            // Handle special number operators
+            apply_operator(
+                &mut output_queue,
+                token.operator,
+                precision,
+                rand_state,
+                base,
+                radians,
+            );
         } else {
             match token.operator {
                 '(' => operator_stack.push('('),
@@ -586,22 +690,33 @@ fn evaluate_tokens(
                             precision,
                             rand_state,
                             base,
+                            radians,
                         );
                     }
                     if operator_stack.pop() != Some('(') {
                         panic!("Mismatched parentheses");
                     }
                 }
-                'p' => output_queue.push(Complex::with_val(
-                    precision,
-                    rug::Float::with_val(precision, rug::float::Constant::Pi),
-                )),
-                'E' => output_queue.push(Complex::with_val(
-                    precision,
-                    rug::Float::with_val(precision, rug::float::Constant::Euler),
-                )),
-                'r' => output_queue.push(generate_random(precision, rand_state)),
+                'n' | 'a' | 'C' | 'S' | 'T' | 'c' | 'i' | 'l' | 'L' | 's' | 'q' | 't' => {
+                    // Unary operators
+                    while !operator_stack.is_empty()
+                        && get_precedence(*operator_stack.last().unwrap())
+                            > get_precedence(token.operator)
+                        && *operator_stack.last().unwrap() != '('
+                    {
+                        apply_operator(
+                            &mut output_queue,
+                            operator_stack.pop().unwrap(),
+                            precision,
+                            rand_state,
+                            base,
+                            radians,
+                        );
+                    }
+                    operator_stack.push(token.operator);
+                }
                 _ => {
+                    // Binary operators
                     while !operator_stack.is_empty()
                         && get_precedence(*operator_stack.last().unwrap())
                             >= get_precedence(token.operator)
@@ -613,6 +728,7 @@ fn evaluate_tokens(
                             precision,
                             rand_state,
                             base,
+                            radians,
                         );
                     }
                     operator_stack.push(token.operator);
@@ -621,97 +737,51 @@ fn evaluate_tokens(
         }
     }
 
-    // Apply any remaining operators
     while let Some(op) = operator_stack.pop() {
         if op == '(' || op == ')' {
             panic!("Mismatched parentheses");
         }
-        apply_operator(&mut output_queue, op, precision, rand_state, base);
+        apply_operator(&mut output_queue, op, precision, rand_state, base, radians);
     }
 
-    output_queue
-        .pop()
-        .unwrap_or_else(|| Complex::with_val(precision, 0))
-}
-fn apply_operator(
-    output_queue: &mut Vec<Complex>,
-    op: char,
-    precision: u32,
-    rand_state: &mut rug::rand::RandState,
-    base: u8,
-) {
-    match op {
-        'n' => {
-            // Unary negation
-            if let Some(operand) = output_queue.pop() {
-                output_queue.push(-operand);
-            }
-        }
-        'a' | 'C' | 'S' | 'T' | 'c' | 'i' | 'l' | 'L' | 'r' | 'e' | 's' | 'q' | 't' => {
-            if let Some(operand) = output_queue.pop() {
-                let result = match op {
-                    'a' => operand.abs(),
-                    'C' => operand.acos(),
-                    'S' => operand.asin(),
-                    'T' => operand.atan(),
-                    'c' => operand.cos(),
-                    'i' => Complex::with_val(precision, (operand.imag(), 0)),
-                    'l' => operand.ln(),
-                    'L' => operand.ln() / Float::with_val(precision, base).ln(),
-                    'r' => generate_random(precision, rand_state),
-                    'e' => Complex::with_val(precision, (operand.real(), 0)),
-                    's' => operand.sin(),
-                    'q' => operand.sqrt(),
-                    't' => operand.tan(),
-                    _ => panic!("Unknown operator!"),
-                };
-                output_queue.push(result);
-            }
-        }
-        _ => {
-            if let (Some(b), Some(a)) = (output_queue.pop(), output_queue.pop()) {
-                let result = match op {
-                    '%' => a.modulus(b),
-                    '^' => a.pow(&b),
-                    '*' => a * b,
-                    '+' => a + b,
-                    '-' => a - b,
-                    '/' => a / b,
-                    _ => panic!("Unknown operator!"),
-                };
-                output_queue.push(result);
-            }
-        }
+    if output_queue.len() != 1 {
+        panic!("Invalid expression");
     }
+
+    output_queue.pop().unwrap()
 }
 fn get_precedence(op: char) -> Precedence {
     match op {
         '+' | '-' => Precedence::Addition,
         '*' | '/' | '%' => Precedence::Multiplication,
         '^' => Precedence::Exponentiation,
-        'a' | 'C' | 'S' | 'T' | 'c' | 'i' | 'l' | 'L' | 'r' | 'e' | 's' | 'q' | 't' => {
-            Precedence::Function
+        'a' | 'C' | 'S' | 'T' | 'c' | 'i' | 'l' | 'L' | 'e' | 's' | 'q' | 't' | 'n' => {
+            Precedence::UnaryOperator
         }
-        'n' => Precedence::UnaryMinus,
+        '(' | ')' => Precedence::Highest,
         _ => Precedence::Lowest,
     }
 }
 fn generate_random(precision: u32, rand_state: &mut rug::rand::RandState) -> Complex {
-    let real_sign = Float::with_val(1, Float::random_cont(rand_state));
-    let real = if real_sign > 0.375 {
-        Float::with_val(precision, Float::random_cont(rand_state))
-    } else {
-        -Float::with_val(precision, Float::random_cont(rand_state))
-    };
-    let imag_sign = Float::with_val(1, Float::random_cont(rand_state));
-    let imaginary = if imag_sign > 0.375 {
-        Float::with_val(precision, Float::random_cont(rand_state))
-    } else {
-        -Float::with_val(precision, Float::random_cont(rand_state))
-    };
-    Complex::with_val(precision, (real, imaginary))
+    let real = Float::with_val(precision, Float::random_cont(rand_state));
+    Complex::with_val(precision, (real, 0))
 }
+fn gaussian_complex_random(precision: u32, rand_state: &mut rug::rand::RandState) -> Complex {
+    // Box-Muller transform to generate Gaussian random numbers
+    let u1 = Float::with_val(precision, Float::random_cont(rand_state));
+    let u2 = Float::with_val(precision, Float::random_cont(rand_state));
 
+    let two = Float::with_val(precision, 2);
+    let pi = Float::with_val(precision, rug::float::Constant::Pi);
+
+    let r = (Float::with_val(precision, -two.clone() * u1.ln())).sqrt();
+    let theta = two * pi * u2;
+
+    let real = &r * theta.clone().cos();
+    let imag = &r * theta.sin();
+
+    Complex::with_val(precision, (real, imag))
+}
 fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
     let mut real_int = Float::with_val(precision, 0);
     for &digit in &token.real_integer {
@@ -747,8 +817,15 @@ fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
 
     Complex::with_val(precision, (real, imaginary))
 }
-
 fn num2string(num: &Complex, base: u8, digits: usize) -> String {
+    if num.real().is_nan()
+        || num.imag().is_nan()
+        || num.real().is_infinite()
+        || num.imag().is_infinite()
+    {
+        return "NaN".to_string();
+    }
+
     let number;
     if num.imag().is_zero() {
         number = format!(" {}", format_part(num.real(), base, digits));
@@ -764,6 +841,9 @@ fn num2string(num: &Complex, base: u8, digits: usize) -> String {
 fn format_part(num: &rug::Float, base: u8, num_digits: usize) -> String {
     if num.is_zero() {
         return " 0.".to_owned();
+    }
+    if num.is_nan() || num.is_infinite() {
+        return "NaN".to_owned();
     }
     let mut number = "".to_owned();
 
@@ -854,4 +934,126 @@ fn format_int(mut num: usize, base: usize) -> String {
         number.push(digit as char);
     }
     number.chars().rev().collect()
+}
+fn get_base_name(base: u8) -> Option<&'static str> {
+    match base {
+        2 => Some("Binary"),
+        3 => Some("Ternary"),
+        4 => Some("Quaternary"),
+        5 => Some("Quinary"),
+        6 => Some("Senary"),
+        7 => Some("Septenary"),
+        8 => Some("Octal"),
+        9 => Some("Nonary"),
+        10 => Some("Decimal"),
+        11 => Some("Undecimal"),
+        12 => Some("Dozenal"),
+        13 => Some("Tridecimal"),
+        14 => Some("Tetradecimal"),
+        15 => Some("Pentadecimal"),
+        16 => Some("Hexadecimal"),
+        17 => Some("Heptadecimal"),
+        18 => Some("Octodecimal"),
+        19 => Some("Enneadecimal"),
+        20 => Some("Vigesimal"),
+        21 => Some("Unvigesimal"),
+        22 => Some("Duovigesimal"),
+        23 => Some("Trivigesimal"),
+        24 => Some("Tetravigesimal"),
+        25 => Some("Pentavigesimal"),
+        26 => Some("Hexavigesimal"),
+        27 => Some("Heptavigesimal"),
+        28 => Some("Octovigesimal"),
+        29 => Some("Enneabigesimal"),
+        30 => Some("Trigesimal"),
+        31 => Some("Untrigesimal"),
+        32 => Some("Duotrigesimal"),
+        33 => Some("Tritrigesimal"),
+        34 => Some("Tetratrigesimal"),
+        35 => Some("Pentatrigesimal"),
+        36 => Some("Hexatrigesimal"),
+        _ => None,
+    }
+}
+fn debug_println(msg: &str) {
+    if DEBUG.load(Ordering::Relaxed) {
+        println!("{}", msg);
+    }
+}
+use colored::Colorize;
+fn run_tests() -> (usize, usize) {
+    let mut base = 10;
+    let mut digits = 12;
+    let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32;
+    let mut radians = true;
+    let mut rand_state = rand::RandState::new();
+
+    let tests = vec![
+        (":base C", "Base set to Dozenal (C)."),
+        (":precision 20", "Precision set to 20 digits."),
+        ("#sin(@pi/2)", "  1."),
+        ("#sin(@pi/4)", "  8.59 A69 650 3BA 297 996 256 428~ :-1"),
+        (":degrees", "Angle units set to degrees."),
+        ("#sin76", "  1."),
+        (":radians", "Angle units set to radians."),
+        ("#sin76", "  A.88 9AB 897 724 376 B81 A25 541~ :-1"),
+        ("(1+2)*3", "  9."),
+        ("1+2*3", "  7."),
+        ("(1+2)*(3+4)", "  19."),
+        ("1+2*(3+4)", "  13."),
+        ("((1+2)*3)+4", "  11."),
+        ("1+(2*3)+4", "  B."),
+        ("2^(3^2)", "  368."),
+        ("(2^3)^2", "  54."),
+        ("#log(100)/2", "  1."),
+        ("(@pi+@e)^2", "  2A.408 353 754 8B8 38B 235 632 3~"),
+        ("1/(1+1/(1+1/(1+1/2)))", "  7.6 :-1"),
+        ("(((1+2)+3)+4)", "  A."),
+        ("1+(2+(3+4))", "  A."),
+        ("(1+2+3+4)", "  A."),
+        ("((())1+2(()))", ""),
+        ("(1+2))", ""),
+        ("(1+2", ""),
+        ("1+*2", ""),
+        ("1 2 + 3", ""),
+        ("#sin()", ""),
+        ("#sin", ""),
+        ("#sin(#cos())", ""),
+        ("1/0", "NaN"),
+        ("#sqrt-1", "[ 0. , 1. ]"),
+    ];
+
+    let mut passed = 0;
+    let total = tests.len();
+
+    for (input, expected) in tests {
+        println!("Test input: '{}'", input);
+        let result = match tokenize(input, &mut base, &mut precision, &mut digits, &mut radians) {
+            Ok(tokens) => {
+                let eval_result =
+                    evaluate_tokens(&tokens, base, precision, &mut rand_state, radians);
+                num2string(&eval_result, base, digits)
+            }
+            Err((msg, pos)) => {
+                if pos == std::usize::MAX {
+                    msg.to_string()
+                } else {
+                    format!("{}\n{}^\nError: {}", input, " ".repeat(pos), msg)
+                }
+            }
+        };
+
+        println!("Result    : {}", result);
+        println!("Expected  : {}", expected);
+
+        if result == expected || expected == "" {
+            println!("{}", "Test passed!".green());
+            passed += 1;
+        } else {
+            println!("{}", "Test failed!".red());
+        }
+        println!();
+    }
+
+    (passed, total)
 }
