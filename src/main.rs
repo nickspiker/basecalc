@@ -1,17 +1,12 @@
 use az::Cast;
 use rug::ops::*;
 use rug::*;
-use rustyline::{error::ReadlineError, Config, DefaultEditor, Editor};
+use rustyline::{error::ReadlineError, Config, DefaultEditor};
 use std::sync::atomic::{AtomicBool, Ordering};
-struct HistoryEntry {
-    command: String,
-    result: String,
-}
 
 fn main() -> rustyline::Result<()> {
     let config = Config::builder().build();
     let mut rl = DefaultEditor::with_config(config)?;
-    let mut custom_history: Vec<HistoryEntry> = Vec::new();
 
     let mut base = 10;
     let mut digits = 12;
@@ -27,7 +22,7 @@ fn main() -> rustyline::Result<()> {
                     println!("Goodbye!");
                     break;
                 }
-
+                rl.add_history_entry(line.clone())?;
                 if line.starts_with(":debug") {
                     if DEBUG.load(Ordering::Relaxed) {
                         println!("Debug disabled");
@@ -47,11 +42,6 @@ fn main() -> rustyline::Result<()> {
                         let result_str = num2string(&result, base, digits);
                         println!("{}", result_str);
 
-                        custom_history.push(HistoryEntry {
-                            command: line.clone(),
-                            result: result_str,
-                        });
-                        rl.add_history_entry(line.clone())?;
                         debug_println(&format!("Added to history: {}", line));
                     }
                     Err((msg, pos)) => {
@@ -65,11 +55,7 @@ fn main() -> rustyline::Result<()> {
                 }
             }
             Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                continue;
-            }
-            Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
+                println!("Pressing enter with no input will exit as well.");
                 break;
             }
             Err(err) => {
@@ -169,13 +155,6 @@ fn tokenize(
                 });
                 paren_count += 1;
                 index += 1;
-            } else if input[index] == b'-' {
-                tokens.push(Token {
-                    operator: 'n', // 'n' for unary minus
-                    operands: 1,
-                    ..Token::new()
-                });
-                index += 1;
             } else if input[index] == b'#' {
                 let (token, new_index) = parse_operator(input, index)?;
                 tokens.push(token);
@@ -195,7 +174,7 @@ fn tokenize(
                     && number_token.imaginary_integer.is_empty()
                     && number_token.imaginary_fraction.is_empty()
                 {
-                    return Err((format!("Expected number or operator!"), index));
+                    return Err((format!("Expected number or unary operator!"), index));
                 } else {
                     tokens.push(number_token);
                     expect_value = false;
@@ -234,7 +213,7 @@ fn tokenize(
 
     let last_token = tokens.last().unwrap();
     if last_token.operator != 0 as char && last_token.operands > 0 {
-        return Err((format!("Incomplete expression"), input.len()));
+        return Err((format!("Incomplete expression!"), input.len()));
     }
 
     for token in &tokens {
@@ -410,6 +389,14 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
                 return Ok((token, index));
             }
         }
+    }
+    if index < input.len() && input[index] == b'#' {
+        // We've encountered an unknown function
+        let mut end = index + 1;
+        while end < input.len() && (input[end].is_ascii_alphabetic() || input[end] == b'_') {
+            end += 1;
+        }
+        return Err(("Unknown function!".to_owned(), index));
     }
 
     Ok((token, index))
@@ -696,40 +683,43 @@ fn evaluate_tokens(
                     if operator_stack.pop() != Some('(') {
                         panic!("Mismatched parentheses");
                     }
-                }
-                'n' | 'a' | 'C' | 'S' | 'T' | 'c' | 'i' | 'l' | 'L' | 's' | 'q' | 't' => {
-                    // Unary operators
-                    while !operator_stack.is_empty()
-                        && get_precedence(*operator_stack.last().unwrap())
-                            > get_precedence(token.operator)
-                        && *operator_stack.last().unwrap() != '('
-                    {
-                        apply_operator(
-                            &mut output_queue,
-                            operator_stack.pop().unwrap(),
-                            precision,
-                            rand_state,
-                            base,
-                            radians,
-                        );
+                    // Apply function operator if it's on top of the stack
+                    if let Some(&op) = operator_stack.last() {
+                        if get_precedence(op) == Precedence::UnaryOperator {
+                            apply_operator(
+                                &mut output_queue,
+                                operator_stack.pop().unwrap(),
+                                precision,
+                                rand_state,
+                                base,
+                                radians,
+                            );
+                        }
                     }
-                    operator_stack.push(token.operator);
                 }
                 _ => {
-                    // Binary operators
-                    while !operator_stack.is_empty()
-                        && get_precedence(*operator_stack.last().unwrap())
-                            >= get_precedence(token.operator)
-                        && *operator_stack.last().unwrap() != '('
-                    {
-                        apply_operator(
-                            &mut output_queue,
-                            operator_stack.pop().unwrap(),
-                            precision,
-                            rand_state,
-                            base,
-                            radians,
-                        );
+                    // Handle both unary and binary operators
+                    while !operator_stack.is_empty() {
+                        let top_op = *operator_stack.last().unwrap();
+                        if top_op == '(' {
+                            break;
+                        }
+                        if (get_precedence(top_op) > get_precedence(token.operator))
+                            || (get_precedence(top_op) == get_precedence(token.operator)
+                                && token.operator != 'n')
+                        // Allow 'n' (unary minus) to be right-associative
+                        {
+                            apply_operator(
+                                &mut output_queue,
+                                operator_stack.pop().unwrap(),
+                                precision,
+                                rand_state,
+                                base,
+                                radians,
+                            );
+                        } else {
+                            break;
+                        }
                     }
                     operator_stack.push(token.operator);
                 }
@@ -738,14 +728,14 @@ fn evaluate_tokens(
     }
 
     while let Some(op) = operator_stack.pop() {
-        if op == '(' || op == ')' {
+        if op == '(' {
             panic!("Mismatched parentheses");
         }
         apply_operator(&mut output_queue, op, precision, rand_state, base, radians);
     }
 
     if output_queue.len() != 1 {
-        panic!("Invalid expression");
+        panic!("Invalid expression!");
     }
 
     output_queue.pop().unwrap()
@@ -1011,16 +1001,49 @@ fn run_tests() -> (usize, usize) {
         ("(((1+2)+3)+4)", "  A."),
         ("1+(2+(3+4))", "  A."),
         ("(1+2+3+4)", "  A."),
-        ("((())1+2(()))", ""),
-        ("(1+2))", ""),
-        ("(1+2", ""),
-        ("1+*2", ""),
-        ("1 2 + 3", ""),
-        ("#sin()", ""),
-        ("#sin", ""),
-        ("#sin(#cos())", ""),
+        ("((())1+2(()))", "Expected number or unary operator!"),
+        ("(1+2))", "Mismatched parentheses!"),
+        ("(1+2", "Mismatched parentheses!"),
+        ("1+*2", "Expected number or unary operator!"),
+        ("1 2 + 3", "  15."),
+        ("#sin()", "Expected number or unary operator!"),
+        ("#sin", "Incomplete expression!"),
+        ("#sin(#cos())", "Expected number or unary operator!"),
         ("1/0", "NaN"),
+        ("[0,-1]/0", "NaN"),
         ("#sqrt-1", "[ 0. , 1. ]"),
+        ("---#sin---@pi", " -1."),
+        ("#sqrt(#sqrt-1)", "  8.59 A69 650 3BA 297 996 256 428~ :-1"),
+        ("-3", " -3."),
+        ("--3", " 3."),
+        ("---3", " -3."),
+        ("----3", " 3."),
+        ("1-3", " -2."),
+        ("1--3", "  4."),
+        ("1---3", " -2."),
+        ("1----3", "  4."),
+        ("1.2.3", "Multiple decimals in number!"),
+        ("#sin#cos@pi", " -A.12 08A A92 234 12B 470 074 934~ :-1"),
+        ("(1+2)*(3+4", "Mismatched parentheses!"),
+        ("#log(0)", "NaN"),
+        ("#sqrt(-1-1)", "[ 0. , 1.4B7 917 0A0 7B8 573 770 4B0 85~ ]"),
+        ("1/3+1/3+1/3-1", "  0."),
+        ("@pi@e", "Expected operator!"),
+        ("#sin()#cos()", "Expected number or unary operator!"),
+        ("1++2", "Expected number or unary operator!"),
+        ("((1+2)*3", "Mismatched parentheses!"),
+        ("1+(2*3", "Mismatched parentheses!"),
+        ("1 2 3 +", "Incomplete expression!"),
+        ("1 + + 2", "Expected number or unary operator!"),
+        ("#funky(1)", "Unknown function!"),
+        ("1 / (2-2)", "NaN"),
+        ("#sqrt(1+2+3)+)", "Expected number or unary operator!"),
+        ("(((1+2)*(3+4))+5", "Mismatched parentheses!"),
+        ("1 2 3 4 5", "  12 345."),
+        ("*1", "Expected number or unary operator!"),
+        ("1*", "Incomplete expression!"),
+        ("()", "Expected number or unary operator!"),
+        ("#sin", "Incomplete expression!"),
     ];
 
     let mut passed = 0;
@@ -1034,19 +1057,13 @@ fn run_tests() -> (usize, usize) {
                     evaluate_tokens(&tokens, base, precision, &mut rand_state, radians);
                 num2string(&eval_result, base, digits)
             }
-            Err((msg, pos)) => {
-                if pos == std::usize::MAX {
-                    msg.to_string()
-                } else {
-                    format!("{}\n{}^\nError: {}", input, " ".repeat(pos), msg)
-                }
-            }
+            Err((msg, _pos)) => msg.to_string(),
         };
 
         println!("Result    : {}", result);
         println!("Expected  : {}", expected);
 
-        if result == expected || expected == "" {
+        if result == expected {
             println!("{}", "Test passed!".green());
             passed += 1;
         } else {
