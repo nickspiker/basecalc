@@ -58,8 +58,8 @@ fn main() -> rustyline::Result<()> {
                         match evaluate_tokens(&tokens, base, precision, &mut rand_state, radians) {
                             Ok(result) => {
                                 let result_vec = num2string(&result, base, digits, &colours);
-                                for colored_string in result_vec {
-                                    print!("{}", colored_string);
+                                for coloured_string in result_vec {
+                                    print!("{}", coloured_string);
                                 }
                                 println!();
                             }
@@ -879,7 +879,7 @@ fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
 
     Complex::with_val(precision, (real, imaginary))
 }
-fn num2string(num: &Complex, base: u8, digits: usize, colors: &RGBValues) -> Vec<ColoredString> {
+fn num2string(num: &Complex, base: u8, digits: usize, colours: &RGBValues) -> Vec<ColoredString> {
     let mut result = Vec::new();
 
     if num.real().is_nan()
@@ -887,19 +887,19 @@ fn num2string(num: &Complex, base: u8, digits: usize, colors: &RGBValues) -> Vec
         || num.real().is_infinite()
         || num.imag().is_infinite()
     {
-        result.push("NaN".truecolor(colors.nan.0, colors.nan.1, colors.nan.2));
+        result.push("NaN".truecolor(colours.nan.0, colours.nan.1, colours.nan.2));
         return result;
     }
 
     if num.imag().is_zero() {
         result.push(" ".normal());
-        result.extend(format_part(num.real(), base, digits, colors, true, true));
+        result.extend(format_part(num.real(), base, digits, colours, true, true));
     } else {
-        result.push("[".truecolor(colors.brackets.0, colors.brackets.1, colors.brackets.2));
-        result.extend(format_part(num.real(), base, digits, colors, true, false));
-        result.push(" ,".truecolor(colors.comma.0, colors.comma.1, colors.comma.2));
-        result.extend(format_part(num.imag(), base, digits, colors, false, false));
-        result.push(" ]".truecolor(colors.brackets.0, colors.brackets.1, colors.brackets.2));
+        result.push("[".truecolor(colours.brackets.0, colours.brackets.1, colours.brackets.2));
+        result.extend(format_part(num.real(), base, digits, colours, true, false));
+        result.push(" ,".truecolor(colours.comma.0, colours.comma.1, colours.comma.2));
+        result.extend(format_part(num.imag(), base, digits, colours, false, false));
+        result.push(" ]".truecolor(colours.brackets.0, colours.brackets.1, colours.brackets.2));
     }
 
     result
@@ -908,7 +908,7 @@ fn format_part(
     num: &rug::Float,
     base: u8,
     num_digits: usize,
-    colors: &RGBValues,
+    colours: &RGBValues,
     is_real: bool,
     is_lone: bool,
 ) -> Vec<ColoredString> {
@@ -917,15 +917,15 @@ fn format_part(
     if num.is_zero() {
         result.push(" ".normal());
         result.push("0".truecolor(
-            colors.lone_integer.0,
-            colors.lone_integer.1,
-            colors.lone_integer.2,
+            colours.lone_integer.0,
+            colours.lone_integer.1,
+            colours.lone_integer.2,
         ));
-        result.push(".".truecolor(colors.decimal.0, colors.decimal.1, colors.decimal.2));
+        result.push(".".truecolor(colours.decimal.0, colours.decimal.1, colours.decimal.2));
         return result;
     }
     if num.is_nan() || num.is_infinite() {
-        result.push("NaN".truecolor(colors.nan.0, colors.nan.1, colors.nan.2));
+        result.push("NaN".truecolor(colours.nan.0, colours.nan.1, colours.nan.2));
         return result;
     }
 
@@ -933,7 +933,7 @@ fn format_part(
     if is_positive {
         result.push(" ".normal());
     } else {
-        result.push("-".truecolor(colors.sign.0, colors.sign.1, colors.sign.2));
+        result.push("-".truecolor(colours.sign.0, colours.sign.1, colours.sign.2));
     }
 
     let mut num_abs = num.clone().abs();
@@ -985,29 +985,29 @@ fn format_part(
             fractional_part.push(' ')
         }
     }
-    let (int_color, frac_color) = if is_lone {
-        (colors.lone_integer, colors.lone_fraction)
+    let (int_colour, frac_colour) = if is_lone {
+        (colours.lone_integer, colours.lone_fraction)
     } else if is_real {
-        (colors.real_integer, colors.real_fraction)
+        (colours.real_integer, colours.real_fraction)
     } else {
-        (colors.imaginary_integer, colors.imaginary_fraction)
+        (colours.imaginary_integer, colours.imaginary_fraction)
     };
 
     let tilde = (num_abs - 0.5f32).abs() > 2f64.pow(-16);
     if decimal {
         if integer_part.is_empty() {
-            result.push("0".truecolor(int_color.0, int_color.1, int_color.2));
+            result.push("0".truecolor(int_colour.0, int_colour.1, int_colour.2));
         } else {
-            result.push(integer_part.truecolor(int_color.0, int_color.1, int_color.2));
+            result.push(integer_part.truecolor(int_colour.0, int_colour.1, int_colour.2));
         }
-        result.push(".".truecolor(colors.decimal.0, colors.decimal.1, colors.decimal.2));
+        result.push(".".truecolor(colours.decimal.0, colours.decimal.1, colours.decimal.2));
         result.push(trim_zeros(fractional_part).truecolor(
-            frac_color.0,
-            frac_color.1,
-            frac_color.2,
+            frac_colour.0,
+            frac_colour.1,
+            frac_colour.2,
         ));
         if tilde {
-            result.push("~".truecolor(colors.tilde.0, colors.tilde.1, colors.tilde.2));
+            result.push("~".truecolor(colours.tilde.0, colours.tilde.1, colours.tilde.2));
         } else {
             result.push(" ".normal());
         }
@@ -1029,28 +1029,28 @@ fn format_part(
                 new_number.push_str(number.split_at(1).1);
                 number = new_number;
             }
-            result.push(number.truecolor(frac_color.0, frac_color.1, frac_color.2));
+            result.push(number.truecolor(frac_colour.0, frac_colour.1, frac_colour.2));
             if tilde {
-                result.push("~".truecolor(colors.tilde.0, colors.tilde.1, colors.tilde.2));
+                result.push("~".truecolor(colours.tilde.0, colours.tilde.1, colours.tilde.2));
             } else {
                 result.push(" ".normal());
             }
-            result.push(" :".truecolor(colors.colon.0, colors.colon.1, colors.colon.2));
+            result.push(" :".truecolor(colours.colon.0, colours.colon.1, colours.colon.2));
             if decimal_place < 0 {
                 let mut exponent = "-".to_owned();
                 exponent.push_str(&format_int((-decimal_place) as usize, base as usize));
                 result.push(exponent.truecolor(
-                    colors.exponent.0,
-                    colors.exponent.1,
-                    colors.exponent.2,
+                    colours.exponent.0,
+                    colours.exponent.1,
+                    colours.exponent.2,
                 ));
             } else {
                 let mut exponent = " ".to_owned();
                 exponent.push_str(&format_int(decimal_place as usize, base as usize));
                 result.push(exponent.truecolor(
-                    colors.exponent.0,
-                    colors.exponent.1,
-                    colors.exponent.2,
+                    colours.exponent.0,
+                    colours.exponent.1,
+                    colours.exponent.2,
                 ));
             }
         } else {
@@ -1070,28 +1070,28 @@ fn format_part(
                 new_number.push_str(number.split_at(1).1);
                 number = new_number;
             }
-            result.push(number.truecolor(int_color.0, int_color.1, int_color.2));
+            result.push(number.truecolor(int_colour.0, int_colour.1, int_colour.2));
             if tilde {
-                result.push("~".truecolor(colors.tilde.0, colors.tilde.1, colors.tilde.2));
+                result.push("~".truecolor(colours.tilde.0, colours.tilde.1, colours.tilde.2));
             } else {
                 result.push(" ".normal());
             }
-            result.push(" :".truecolor(colors.colon.0, colors.colon.1, colors.colon.2));
+            result.push(" :".truecolor(colours.colon.0, colours.colon.1, colours.colon.2));
             if decimal_place < 0 {
                 let mut exponent = "-".to_owned();
                 exponent.push_str(&format_int((-decimal_place) as usize, base as usize));
                 result.push(exponent.truecolor(
-                    colors.exponent.0,
-                    colors.exponent.1,
-                    colors.exponent.2,
+                    colours.exponent.0,
+                    colours.exponent.1,
+                    colours.exponent.2,
                 ));
             } else {
                 let mut exponent = " ".to_owned();
                 exponent.push_str(&format_int(decimal_place as usize, base as usize));
                 result.push(exponent.truecolor(
-                    colors.exponent.0,
-                    colors.exponent.1,
-                    colors.exponent.2,
+                    colours.exponent.0,
+                    colours.exponent.1,
+                    colours.exponent.2,
                 ));
             }
         }
@@ -1171,7 +1171,6 @@ fn debug_println(msg: &str) {
         println!("{}", msg);
     }
 }
-use colored::Colorize;
 fn run_tests(colours: &RGBValues) -> (usize, usize) {
     let mut base = 10;
     let mut digits = 12;
@@ -1315,9 +1314,9 @@ fn run_tests(colours: &RGBValues) -> (usize, usize) {
 
     (passed, total)
 }
-fn coloured_vec_to_string(colored_vec: &Vec<ColoredString>) -> String {
+fn coloured_vec_to_string(coloured_vec: &Vec<ColoredString>) -> String {
     let mut result = String::new();
-    for coloured_string in colored_vec {
+    for coloured_string in coloured_vec {
         for c in coloured_string.chars() {
             if c.is_ascii() {
                 result.push(c);
