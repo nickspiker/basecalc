@@ -15,23 +15,23 @@ fn main() -> rustyline::Result<()> {
     let mut rand_state = rand::RandState::new();
 
     let colours = RGBValues {
-        lone_integer: (180, 180, 180),
-        lone_fraction: (140, 100, 140),
-        real_integer: (180, 140, 140),
-        real_fraction: (140, 60, 100),
-        imaginary_integer: (140, 140, 180),
-        imaginary_fraction: (100, 60, 140),
-        exponent: (220, 240, 50),
-        brackets: (180, 190, 60),
-        comma: (255, 190, 0),
-        colon: (40, 80, 20),
-        decimal: (255, 255, 255),
-        sign: (255, 255, 255),
-        tilde: (80, 140, 120),
-        carat: (255, 20, 0),
-        error: (220, 100, 90),
-        nan: (200, 100, 200),
-        message: (120, 180, 120),
+        lone_integer: (0xB4, 0xB4, 0xB4),       // Light gray
+        lone_fraction: (0x8C, 0x64, 0x8C),      // Muted purple
+        real_integer: (0xB4, 0x8C, 0x8C),       // Muted red
+        real_fraction: (0x8C, 0x3C, 0x64),      // Dark red
+        imaginary_integer: (0x8C, 0x8C, 0xB4),  // Muted blue
+        imaginary_fraction: (0x64, 0x3C, 0x8C), // Dark purple
+        exponent: (0xDC, 0xF0, 0x32),           // Bright yellow
+        decimal: (0xFF, 0xFF, 0xFF),            // White
+        sign: (0xFF, 0xFF, 0xFF),               // White
+        tilde: (0x50, 0x8C, 0x78),              // Muted teal
+        carat: (0xFF, 0x14, 0x00),              // Bright red
+        error: (0xDC, 0x64, 0x5A),              // Soft red
+        brackets: (0xB4, 0xBE, 0x3C),           // Olive green
+        comma: (0xFF, 0xBE, 0x00),              // Orange
+        colon: (0x28, 0x50, 0x14),              // Dark green
+        nan: (0xC8, 0x64, 0xC8),                // Bright purple
+        message: (0x78, 0xB4, 0x78),            // Soft green
     };
 
     loop {
@@ -83,8 +83,7 @@ fn main() -> rustyline::Result<()> {
                             );
                         } else {
                             println!(
-                                "{}\n{}{}",
-                                line,
+                                "  {}{}",
                                 " ".repeat(pos),
                                 "^".truecolor(colours.carat.0, colours.carat.1, colours.carat.2)
                             );
@@ -185,117 +184,118 @@ impl Modulus for Complex {
 }
 
 fn tokenize(
-   input_str: &str,
-   base: &mut u8,
-   precision: &mut u32,
-   digits: &mut usize,
-   radians: &mut bool,
-   colours: &RGBValues,
+    input_str: &str,
+    base: &mut u8,
+    precision: &mut u32,
+    digits: &mut usize,
+    radians: &mut bool,
+    colours: &RGBValues,
 ) -> Result<Vec<Token>, (String, usize)> {
-   debug_println(&format!("Tokenizing: {}", input_str));
-   let input = input_str.as_bytes();
-   let mut tokens = Vec::new();
-   let mut index = 0;
-   let mut paren_count = 0;
+    debug_println(&format!("Tokenizing: {}", input_str));
+    let input = input_str.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    let mut paren_count = 0;
 
-   while index < input.len() {
-       if input[index].is_ascii_whitespace() {
-           index += 1;
-           continue;
-       }
+    while index < input.len() {
+        if input[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
 
-       if input[index] == b':' {
-           return parse_command(input, index + 1, base, precision, digits, radians, colours);
-       }
+        if input[index] == b':' {
+            return parse_command(input, index + 1, base, precision, digits, radians, colours);
+        }
 
-       match input[index] {
-           b'(' => {
-               tokens.push(Token {
-                   operator: '(',
-                   operands: 0,
-                   ..Token::new()
-               });
-               paren_count += 1;
-               index += 1;
-           }
-           b')' => {
-               if paren_count == 0 {
-                   return Err((format!("Mismatched parentheses!"), index));
-               }
-               tokens.push(Token {
-                   operator: ')',
-                   operands: 0,
-                   ..Token::new()
-               });
-               paren_count -= 1;
-               index += 1;
-           }
-           b'#' => {
-               let (token, new_index) = parse_operator(input, index)?;
-               tokens.push(token);
-               index = new_index;
-           }
-           b'@' => {
-               let (token, new_index) = parse_constant(input, index)?;
-               tokens.push(token);
-               index = new_index;
-           }
-           b'-' => {
-               let is_unary = tokens.is_empty()
-                   || matches!(
-                       tokens.last().unwrap().operator,
-                       '(' | '+' | '-' | '*' | '/' | '^' | '%' | '#' | 'n'
-                   );
-               if is_unary {
-                   tokens.push(Token {
-                       operator: 'n', // 'n' for unary negation
-                       operands: 1,
-                       ..Token::new()
-                   });
-               } else {
-                   tokens.push(Token {
-                       operator: '-',
-                       operands: 2,
-                       ..Token::new()
-                   });
-               }
-               index += 1;
-           }
-           _ => {
-               if input[index].is_ascii_digit() || input[index] == b'.' || input[index] == b'[' {
-                   let mut number_token = Token::new();
-                   let new_index = parse_number(input, &mut number_token, *base, index)?;
-                   tokens.push(number_token);
-                   index = new_index;
-               } else {
-                   let (token, new_index) = parse_operator(input, index)?;
-                   tokens.push(token);
-                   index = new_index;
-               }
-           }
-       }
-   }
+        match input[index] {
+            b'(' => {
+                tokens.push(Token {
+                    operator: '(',
+                    operands: 0,
+                    ..Token::new()
+                });
+                paren_count += 1;
+                index += 1;
+            }
+            b')' => {
+                if paren_count == 0 {
+                    return Err((format!("Mismatched parentheses!"), index));
+                }
+                tokens.push(Token {
+                    operator: ')',
+                    operands: 0,
+                    ..Token::new()
+                });
+                paren_count -= 1;
+                index += 1;
+            }
+            b'#' => {
+                let (token, new_index) = parse_operator(input, index)?;
+                tokens.push(token);
+                index = new_index;
+            }
+            b'@' => {
+                let (token, new_index) = parse_constant(input, index)?;
+                tokens.push(token);
+                index = new_index;
+            }
+            b'-' => {
+                let is_unary = tokens.is_empty()
+                    || matches!(
+                        tokens.last().unwrap().operator,
+                        '(' | '+' | '-' | '*' | '/' | '^' | '%' | '#' | 'n'
+                    );
+                if is_unary {
+                    tokens.push(Token {
+                        operator: 'n', // 'n' for unary negation
+                        operands: 1,
+                        ..Token::new()
+                    });
+                } else {
+                    tokens.push(Token {
+                        operator: '-',
+                        operands: 2,
+                        ..Token::new()
+                    });
+                }
+                index += 1;
+            }
+            _ => {
+                if input[index].is_ascii_digit() || input[index] == b'.' || input[index] == b'[' {
+                    let mut number_token = Token::new();
+                    let new_index = parse_number(input, &mut number_token, *base, index)?;
+                    tokens.push(number_token);
+                    index = new_index;
+                } else {
+                    let (token, new_index) = parse_operator(input, index)?;
+                    tokens.push(token);
+                    index = new_index;
+                }
+            }
+        }
+    }
 
-   if paren_count != 0 {
-       return Err((format!("Mismatched parentheses!"), input.len()));
-   }
+    if paren_count != 0 {
+        return Err((format!("Mismatched parentheses!"), input.len()));
+    }
 
-   if tokens.is_empty() {
-       return Err((format!("Empty expression"), 0));
-   }
+    if tokens.is_empty() {
+        return Err((format!("Empty expression"), 0));
+    }
 
-   // Check for incomplete expressions
-   let last_token = tokens.last().unwrap();
-   if last_token.operator != '\0' && last_token.operator != ')' && last_token.operands > 0 {
-       return Err((format!("Incomplete expression!"), input.len()));
-   }
+    // Check for incomplete expressions
+    let last_token = tokens.last().unwrap();
+    if last_token.operator != '\0' && last_token.operator != ')' && last_token.operands > 0 {
+        return Err((format!("Incomplete expression!"), input.len()));
+    }
 
-   for token in &tokens {
-       debug_println(&format!("Token: {:?}", token));
-   }
+    for token in &tokens {
+        debug_println(&format!("Token: {:?}", token));
+    }
 
-   Ok(tokens)
-}fn evaluate_tokens(
+    Ok(tokens)
+}
+fn evaluate_tokens(
     tokens: &[Token],
     base: u8,
     precision: u32,
@@ -584,9 +584,9 @@ fn parse_number(
 
         if digit >= base {
             let base_char = if base > 9 {
-                (digit - 10 + b'A') as char
+                (base - 10 + b'A') as char
             } else {
-                (digit + b'0') as char
+                (base + b'0') as char
             };
 
             if base == 36 {
