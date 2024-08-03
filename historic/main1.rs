@@ -1,9 +1,9 @@
 use az::Cast;
-use colored::*;
 use rug::ops::*;
 use rug::*;
 use rustyline::{error::ReadlineError, Config, DefaultEditor};
 use std::sync::atomic::{AtomicBool, Ordering};
+
 fn main() -> rustyline::Result<()> {
     let config = Config::builder().build();
     let mut rl = DefaultEditor::with_config(config)?;
@@ -13,26 +13,6 @@ fn main() -> rustyline::Result<()> {
     let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32;
     let mut radians = true;
     let mut rand_state = rand::RandState::new();
-
-    let colours = RGBValues {
-        lone_integer: (180, 180, 180),
-        lone_fraction: (140, 100, 140),
-        real_integer: (180, 140, 140),
-        real_fraction: (140, 60, 100),
-        imaginary_integer: (140, 140, 180),
-        imaginary_fraction: (100, 60, 140),
-        exponent: (220, 240, 50),
-        brackets: (180, 190, 60),
-        comma: (255, 190, 0),
-        colon: (40, 80, 20),
-        decimal: (255, 255, 255),
-        sign: (255, 255, 255),
-        tilde: (80, 140, 120),
-        carat: (255, 20, 0),
-        error: (220, 100, 90),
-        nan: (200, 100, 200),
-        message: (120, 180, 120),
-    };
 
     loop {
         let readline = rl.readline("> ");
@@ -45,53 +25,25 @@ fn main() -> rustyline::Result<()> {
                 rl.add_history_entry(line.clone())?;
 
                 debug_println(&format!("Processing input: '{}'", line));
-                match tokenize(
-                    &line,
-                    &mut base,
-                    &mut precision,
-                    &mut digits,
-                    &mut radians,
-                    &colours,
-                ) {
+                match tokenize(&line, &mut base, &mut precision, &mut digits, &mut radians) {
                     Ok(tokens) => {
                         debug_println(&format!("Tokens: {:?}", tokens));
                         match evaluate_tokens(&tokens, base, precision, &mut rand_state, radians) {
                             Ok(result) => {
-                                let result_vec = num2string(&result, base, digits, &colours);
-                                for colored_string in result_vec {
-                                    print!("{}", colored_string);
-                                }
-                                println!();
+                                let result_str = num2string(&result, base, digits);
+                                println!("{}", result_str);
                             }
-                            Err(err) => println!(
-                                "{}",
-                                err.truecolor(colours.error.0, colours.error.1, colours.error.2)
-                            ),
+                            Err(err) => println!("Error: {}", err),
                         }
 
                         debug_println(&format!("Added to history: {}", line));
                     }
                     Err((msg, pos)) => {
                         if pos == std::usize::MAX {
-                            println!(
-                                "{}",
-                                msg.truecolor(
-                                    colours.message.0,
-                                    colours.message.1,
-                                    colours.message.2
-                                )
-                            );
+                            println!("{}", msg);
                         } else {
-                            println!(
-                                "{}\n{}{}",
-                                line,
-                                " ".repeat(pos),
-                                "^".truecolor(colours.carat.0, colours.carat.1, colours.carat.2)
-                            );
-                            println!(
-                                "{}",
-                                msg.truecolor(colours.error.0, colours.error.1, colours.error.2)
-                            );
+                            println!("{}\n{}^", line, " ".repeat(pos));
+                            println!("Error: {}", msg);
                         }
                     }
                 }
@@ -101,32 +53,13 @@ fn main() -> rustyline::Result<()> {
                 break;
             }
             Err(err) => {
-                println!("{:?}", err);
+                println!("Error: {:?}", err);
                 break;
             }
         }
     }
 
     Ok(())
-}
-struct RGBValues {
-    lone_integer: (u8, u8, u8),
-    lone_fraction: (u8, u8, u8),
-    real_integer: (u8, u8, u8),
-    real_fraction: (u8, u8, u8),
-    imaginary_integer: (u8, u8, u8),
-    imaginary_fraction: (u8, u8, u8),
-    exponent: (u8, u8, u8),
-    decimal: (u8, u8, u8),
-    sign: (u8, u8, u8),
-    tilde: (u8, u8, u8),
-    carat: (u8, u8, u8),
-    error: (u8, u8, u8),
-    brackets: (u8, u8, u8),
-    comma: (u8, u8, u8),
-    colon: (u8, u8, u8),
-    nan: (u8, u8, u8),
-    message: (u8, u8, u8),
 }
 static DEBUG: AtomicBool = AtomicBool::new(false);
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -166,6 +99,7 @@ impl Token {
 trait Modulus {
     fn modulus(&self, modulor: Complex) -> Complex;
 }
+
 impl Modulus for Complex {
     fn modulus(&self, modulor: Complex) -> Complex {
         let real = if modulor.real().is_zero() {
@@ -183,126 +117,125 @@ impl Modulus for Complex {
         Complex::with_val(self.prec(), (real, imaginary))
     }
 }
-
 fn tokenize(
-   input_str: &str,
-   base: &mut u8,
-   precision: &mut u32,
-   digits: &mut usize,
-   radians: &mut bool,
-   colours: &RGBValues,
+    input_str: &str,
+    base: &mut u8,
+    precision: &mut u32,
+    digits: &mut usize,
+    radians: &mut bool,
 ) -> Result<Vec<Token>, (String, usize)> {
-   debug_println(&format!("Tokenizing: {}", input_str));
-   let input = input_str.as_bytes();
-   let mut tokens = Vec::new();
-   let mut index = 0;
-   let mut paren_count = 0;
+    debug_println(&format!("Tokenizing: {}", input_str));
+    let input = input_str.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    let mut paren_count = 0;
 
-   while index < input.len() {
-       if input[index].is_ascii_whitespace() {
-           index += 1;
-           continue;
-       }
+    while index < input.len() {
+        if input[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
 
-       if input[index] == b':' {
-           return parse_command(input, index + 1, base, precision, digits, radians, colours);
-       }
+        if input[index] == b':' {
+            return parse_command(input, index + 1, base, precision, digits, radians);
+        }
 
-       match input[index] {
-           b'(' => {
-               tokens.push(Token {
-                   operator: '(',
-                   operands: 0,
-                   ..Token::new()
-               });
-               paren_count += 1;
-               index += 1;
-           }
-           b')' => {
-               if paren_count == 0 {
-                   return Err((format!("Mismatched parentheses!"), index));
-               }
-               tokens.push(Token {
-                   operator: ')',
-                   operands: 0,
-                   ..Token::new()
-               });
-               paren_count -= 1;
-               index += 1;
-           }
-           b'#' => {
-               let (token, new_index) = parse_operator(input, index)?;
-               tokens.push(token);
-               index = new_index;
-           }
-           b'@' => {
-               let (token, new_index) = parse_constant(input, index)?;
-               tokens.push(token);
-               index = new_index;
-           }
-           b'-' => {
-               let is_unary = tokens.is_empty()
-                   || matches!(
-                       tokens.last().unwrap().operator,
-                       '(' | '+' | '-' | '*' | '/' | '^' | '%' | '#' | 'n'
-                   );
-               if is_unary {
-                   tokens.push(Token {
-                       operator: 'n', // 'n' for unary negation
-                       operands: 1,
-                       ..Token::new()
-                   });
-               } else {
-                   tokens.push(Token {
-                       operator: '-',
-                       operands: 2,
-                       ..Token::new()
-                   });
-               }
-               index += 1;
-           }
-           _ => {
-               if input[index].is_ascii_digit() || input[index] == b'.' || input[index] == b'[' {
-                   let mut number_token = Token::new();
-                   let new_index = parse_number(input, &mut number_token, *base, index)?;
-                   tokens.push(number_token);
-                   index = new_index;
-               } else {
-                   let (token, new_index) = parse_operator(input, index)?;
-                   tokens.push(token);
-                   index = new_index;
-               }
-           }
-       }
-   }
+        match input[index] {
+            b'(' => {
+                tokens.push(Token {
+                    operator: '(',
+                    operands: 0,
+                    ..Token::new()
+                });
+                paren_count += 1;
+                index += 1;
+            }
+            b')' => {
+                if paren_count == 0 {
+                    return Err((format!("Mismatched parentheses!"), index));
+                }
+                tokens.push(Token {
+                    operator: ')',
+                    operands: 0,
+                    ..Token::new()
+                });
+                paren_count -= 1;
+                index += 1;
+            }
+            b'#' => {
+                let (token, new_index) = parse_operator(input, index)?;
+                tokens.push(token);
+                index = new_index;
+            }
+            b'@' => {
+                let (token, new_index) = parse_constant(input, index)?;
+                tokens.push(token);
+                index = new_index;
+            }
+            b'-' => {
+                let is_unary = tokens.is_empty()
+                    || matches!(
+                        tokens.last().unwrap().operator,
+                        '(' | '+' | '-' | '*' | '/' | '^' | '%' | '#' | 'n'
+                    );
+                if is_unary {
+                    tokens.push(Token {
+                        operator: 'n', // 'n' for unary negation
+                        operands: 1,
+                        ..Token::new()
+                    });
+                } else {
+                    tokens.push(Token {
+                        operator: '-',
+                        operands: 2,
+                        ..Token::new()
+                    });
+                }
+                index += 1;
+            }
+            _ => {
+                if input[index].is_ascii_digit() || input[index] == b'.' || input[index] == b'[' {
+                    let mut number_token = Token::new();
+                    let new_index = parse_number(input, &mut number_token, *base, index)?;
+                    tokens.push(number_token);
+                    index = new_index;
+                } else {
+                    let (token, new_index) = parse_operator(input, index)?;
+                    tokens.push(token);
+                    index = new_index;
+                }
+            }
+        }
+    }
 
-   if paren_count != 0 {
-       return Err((format!("Mismatched parentheses!"), input.len()));
-   }
+    if paren_count != 0 {
+        return Err((format!("Mismatched parentheses!"), input.len()));
+    }
 
-   if tokens.is_empty() {
-       return Err((format!("Empty expression"), 0));
-   }
+    if tokens.is_empty() {
+        return Err((format!("Empty expression"), 0));
+    }
 
-   // Check for incomplete expressions
-   let last_token = tokens.last().unwrap();
-   if last_token.operator != '\0' && last_token.operator != ')' && last_token.operands > 0 {
-       return Err((format!("Incomplete expression!"), input.len()));
-   }
+    // Check for incomplete expressions
+    let last_token = tokens.last().unwrap();
+    if last_token.operator != '\0' && last_token.operator != ')' && last_token.operands > 0 {
+        return Err((format!("Incomplete expression!"), input.len()));
+    }
 
-   for token in &tokens {
-       debug_println(&format!("Token: {:?}", token));
-   }
+    for token in &tokens {
+        debug_println(&format!("Token: {:?}", token));
+    }
 
-   Ok(tokens)
-}fn evaluate_tokens(
+    Ok(tokens)
+}
+
+fn evaluate_tokens(
     tokens: &[Token],
     base: u8,
     precision: u32,
     rand_state: &mut rug::rand::RandState,
     radians: bool,
 ) -> Result<Complex, String> {
-    debug_println("Evaluating tokens:");
     let mut output_queue: Vec<Complex> = Vec::new();
     let mut operator_stack: Vec<char> = Vec::new();
 
@@ -355,8 +288,6 @@ fn tokenize(
                 }
             }
             operator_stack.push(token.operator);
-            debug_println(&format!("Output queue: {:?}", output_queue));
-            debug_println(&format!("Operator stack: {:?}", operator_stack));
         }
     }
 
@@ -390,10 +321,7 @@ fn apply_operator(
         'g' => output_queue.push(gaussian_complex_random(precision, rand_state)),
         'n' => {
             if let Some(operand) = output_queue.pop() {
-                debug_println(&format!(
-                    "Result after unary negation: {:?}",
-                    -operand.clone()
-                ));
+                debug_println(&format!("Result after unary negation: {:?}", -operand.clone()));
                 output_queue.push(-operand);
             } else {
                 return Err("Not enough operands for unary negation".to_string());
@@ -478,8 +406,7 @@ fn apply_operator(
         }
     }
     Ok(())
-}
-fn parse_constant(input: &[u8], index: usize) -> Result<(Token, usize), (String, usize)> {
+}fn parse_constant(input: &[u8], index: usize) -> Result<(Token, usize), (String, usize)> {
     let constants = [
         ("@e", 'E'),     // e (Euler's number)
         ("@gamma", 'G'), // γ Euler-Mascheroni
@@ -509,127 +436,130 @@ fn parse_number(
     base: u8,
     mut index: usize,
 ) -> Result<usize, (String, usize)> {
+    let numbers = [
+        // ("operator", 'operator symbol', operands)
+        ("@e", 'E', 0),     // e (Euler's number)
+        ("@gamma", 'G', 0), // γ Euler-Mascheroni
+        ("@grand", 'g', 0), // Gaussian random
+        ("@pi", 'p', 0),    // Pi
+        ("@rand", 'r', 0),  // Random
+    ];
     let mut complex = false;
     let mut imaginary = false;
     let mut integer = true;
-    let mut expect_sign = false;
-
+    let mut sign_check = true;
+    let mut is_negative = false;
+    let mut first_char = true;
     while index < input.len() {
-        let c = input[index];
-
+        let mut c = input[index];
         if c == b' ' || c == b'_' || c == b'\t' {
             index += 1;
             continue;
         }
-
-        if c == b'[' {
-            if !token.real_integer.is_empty() || !token.real_fraction.is_empty() {
-                return Err((format!("Unexpected '['"), index));
+        if first_char && c == b'@' {
+            for &(num_str, op_char, _) in &numbers {
+                if input[index..].starts_with(num_str.as_bytes()) {
+                    debug_println(&format!("Found number: {}", num_str));
+                    token.operator = op_char;
+                    index += num_str.len();
+                    return Ok(index);
+                }
+            }
+            return Err((format!("Invalid @number!"), index));
+        }
+        first_char = false;
+        if sign_check {
+            if c == b'[' {
+                if !(token.real_integer.is_empty()
+                    && token.real_fraction.is_empty()
+                    && token.imaginary_integer.is_empty()
+                    && token.imaginary_fraction.is_empty())
+                {
+                    return Err((format!("Expected operator!"), index));
+                }
+                complex = true;
+                index += 1
+            }
+            is_negative = input[index] == b'-';
+            index += is_negative as usize;
+            c = input[index];
+        }
+        sign_check = false;
+        if c.is_ascii_digit() || c.is_ascii_alphabetic() {
+            let num;
+            if c.is_ascii_digit() {
+                num = c - b'0';
+            } else if c.is_ascii_uppercase() {
+                num = c - b'A' + 10;
+            } else {
+                num = c - b'a' + 10;
+            }
+            if num >= base {
+                return Err((format!("Invalid number!"), index));
+            }
+            if imaginary {
+                if integer {
+                    token.sign.1 = is_negative;
+                    token.imaginary_integer.push(num);
+                } else {
+                    token.imaginary_fraction.push(num)
+                }
+            } else {
+                if integer {
+                    token.sign.0 = is_negative;
+                    token.real_integer.push(num);
+                } else {
+                    token.real_fraction.push(num)
+                }
+            }
+            index += 1;
+        } else if c == b',' {
+            if complex {
+                if token.real_integer.is_empty() && token.real_fraction.is_empty() {
+                    return Err((format!("Missing real value!"), index));
+                }
+                imaginary = true;
+                sign_check = true;
+                integer = true;
+                index += 1;
+            } else {
+                return Err((
+                    format!("Commas allowed for complex number entry only!"),
+                    index,
+                ));
+            }
+        } else if c == b'[' {
+            if !(token.real_integer.is_empty()
+                && token.real_fraction.is_empty()
+                && token.imaginary_integer.is_empty()
+                && token.imaginary_fraction.is_empty())
+            {
+                return Err((format!("Expected operator!"), index));
             }
             complex = true;
-            expect_sign = true;
-            index += 1;
-            continue;
-        }
-
-        if expect_sign {
-            if c == b'-' {
-                if imaginary {
-                    token.sign.1 = true;
-                } else {
-                    token.sign.0 = true;
-                }
-                index += 1;
-            }
-            expect_sign = false;
-            continue;
-        }
-
-        if c == b',' {
+            index += 1
+        } else if c == b']' {
             if !complex {
-                return Err((format!("Unexpected ','"), index));
+                return Err((format!("Missing opening brackets!"), index));
             }
-            imaginary = true;
-            integer = true;
-            expect_sign = true;
-            index += 1;
-            continue;
-        }
-
-        if c == b']' {
-            if !complex {
-                return Err((format!("Unexpected ']'"), index));
+            if token.imaginary_integer.is_empty() && token.imaginary_fraction.is_empty() {
+                return Err((format!("Missing imaginary value!"), index));
             }
             return Ok(index + 1);
-        }
-
-        if c == b'.' {
-            if !integer {
-                return Err((format!("Multiple decimal points"), index));
-            }
-            integer = false;
-            index += 1;
-            continue;
-        }
-
-        let digit = if c.is_ascii_digit() {
-            c - b'0'
-        } else if c.is_ascii_uppercase() {
-            c - b'A' + 10
-        } else if c.is_ascii_lowercase() {
-            c - b'a' + 10
-        } else {
-            return Ok(index); // End of number
-        };
-
-        if digit >= base {
-            let base_char = if base > 9 {
-                (digit - 10 + b'A') as char
-            } else {
-                (digit + b'0') as char
-            };
-
-            if base == 36 {
-                return Err((
-                    format!(
-                        "Digit out of {} (Z+1) range!",
-                        get_base_name(base).unwrap().to_ascii_lowercase()
-                    ),
-                    index,
-                ));
-            } else {
-                return Err((
-                    format!(
-                        "Digit out of {} ({}) range!",
-                        get_base_name(base).unwrap().to_ascii_lowercase(),
-                        base_char
-                    ),
-                    index,
-                ));
-            };
-        }
-
-        if imaginary {
+        } else if c == b'.' {
             if integer {
-                token.imaginary_integer.push(digit);
+                integer = false;
+                index += 1
             } else {
-                token.imaginary_fraction.push(digit);
+                return Err((format!("Multiple decimals in number!"), index));
             }
         } else {
-            if integer {
-                token.real_integer.push(digit);
-            } else {
-                token.real_fraction.push(digit);
-            }
+            return Ok(index);
         }
-
-        index += 1;
     }
-
     if complex {
-        return Err((format!("Unclosed complex number"), index));
+        return Err((format!("Missing closing brackets!"), index));
     }
-
     Ok(index)
 }
 fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (String, usize)> {
@@ -640,7 +570,7 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
         ("#asin", 'S', 1), // Inverse sine
         ("#atan", 'T', 1), // Inverse tangent
         ("#cos", 'c', 1),  // Cosine
-        ("#im", 'i', 1),   // Imaginary10
+        ("#im", 'i', 1),   // Imaginary
         ("#ln", 'l', 1),   // Natural logarithm
         ("#log", 'L', 1),  // Base logarithm
         ("#re", 'e', 1),   // Real
@@ -686,12 +616,11 @@ fn parse_command(
     precision: &mut u32,
     digits: &mut usize,
     radians: &mut bool,
-    colours: &RGBValues,
 ) -> Result<Vec<Token>, (String, usize)> {
     let message;
     match &input[index..] {
         s if s.eq_ignore_ascii_case(b"test") => {
-            let (passed, total) = run_tests(colours);
+            let (passed, total) = run_tests();
             message = format!("{}/{} tests passed.", passed, total);
         }
         s if s.len() >= 4 && s[..4].eq_ignore_ascii_case(b"base") => {
@@ -754,14 +683,14 @@ fn parse_command(
                 index += 1;
             }
         }
-        s if s.len() >= 6 && s[..6].eq_ignore_ascii_case(b"digits") => {
+        s if s.len() >= 9 && s[..9].eq_ignore_ascii_case(b"precision") => {
             let mut token = Token::new();
-            index = parse_number(input, &mut token, base.clone(), index + 6)?;
+            index = parse_number(input, &mut token, base.clone(), index + 9)?;
             // Check if there's anything after the number
             if index < input.len() {
                 for i in index..input.len() {
                     if input[i] != b' ' && input[i] != b'_' && input[i] != b'\t' {
-                        return Err((format!("Invalid characters after digits value!"), i));
+                        return Err((format!("Invalid characters after precision value!"), i));
                     }
                 }
             }
@@ -879,235 +808,106 @@ fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
 
     Complex::with_val(precision, (real, imaginary))
 }
-fn num2string(num: &Complex, base: u8, digits: usize, colors: &RGBValues) -> Vec<ColoredString> {
-    let mut result = Vec::new();
-
+fn num2string(num: &Complex, base: u8, digits: usize) -> String {
     if num.real().is_nan()
         || num.imag().is_nan()
         || num.real().is_infinite()
         || num.imag().is_infinite()
     {
-        result.push("NaN".truecolor(colors.nan.0, colors.nan.1, colors.nan.2));
-        return result;
+        return "NaN".to_string();
     }
 
+    let number;
     if num.imag().is_zero() {
-        result.push(" ".normal());
-        result.extend(format_part(num.real(), base, digits, colors, true, true));
+        number = format!(" {}", format_part(num.real(), base, digits));
     } else {
-        result.push("[".truecolor(colors.brackets.0, colors.brackets.1, colors.brackets.2));
-        result.extend(format_part(num.real(), base, digits, colors, true, false));
-        result.push(" ,".truecolor(colors.comma.0, colors.comma.1, colors.comma.2));
-        result.extend(format_part(num.imag(), base, digits, colors, false, false));
-        result.push(" ]".truecolor(colors.brackets.0, colors.brackets.1, colors.brackets.2));
-    }
-
-    result
+        number = format!(
+            "[{} ,{} ]",
+            format_part(num.real(), base, digits),
+            format_part(num.imag(), base, digits)
+        );
+    };
+    number
 }
-fn format_part(
-    num: &rug::Float,
-    base: u8,
-    num_digits: usize,
-    colors: &RGBValues,
-    is_real: bool,
-    is_lone: bool,
-) -> Vec<ColoredString> {
-    let mut result = Vec::new();
-
+fn format_part(num: &rug::Float, base: u8, num_digits: usize) -> String {
     if num.is_zero() {
-        result.push(" ".normal());
-        result.push("0".truecolor(
-            colors.lone_integer.0,
-            colors.lone_integer.1,
-            colors.lone_integer.2,
-        ));
-        result.push(".".truecolor(colors.decimal.0, colors.decimal.1, colors.decimal.2));
-        return result;
+        return " 0.".to_owned();
     }
     if num.is_nan() || num.is_infinite() {
-        result.push("NaN".truecolor(colors.nan.0, colors.nan.1, colors.nan.2));
-        return result;
+        return "NaN".to_owned();
     }
+    let mut number = "".to_owned();
 
     let is_positive = num.is_sign_positive();
-    if is_positive {
-        result.push(" ".normal());
-    } else {
-        result.push("-".truecolor(colors.sign.0, colors.sign.1, colors.sign.2));
-    }
-
     let mut num_abs = num.clone().abs();
     let decimal_place = (num_abs.clone().log2() / (Float::with_val(num.prec(), base)).log2())
         .floor()
         .to_f64() as isize;
     num_abs = num_abs / (Float::with_val(num.prec(), base)).pow(decimal_place);
     num_abs += (Float::with_val(num.prec(), base)).pow(-(num_digits as isize)) / 2;
-
-    let mut integer_part = String::new();
     let mut decimal = false;
-    let mut place = 0;
-    let mut offset = place as isize - decimal_place;
-    while offset <= 0 && place < num_digits {
-        place += 1;
-        let digit: u8 = num_abs.clone().floor().cast();
-        num_abs = num_abs - digit;
-        num_abs *= base;
-        let digit_char = if digit < 10 {
-            (digit + b'0') as char
-        } else {
-            ((digit - 10) + b'A') as char
-        };
-        integer_part.push(digit_char);
-        offset = place as isize - decimal_place;
-        if offset.rem_euc(3) == 1 && offset != 1 {
-            //&& place != num_digits - 1
-            integer_part.push(' ')
-        }
-    }
-    if offset == 1 {
-        decimal = true;
-    }
-    let mut fractional_part = String::new();
-    while offset > 0 && place < num_digits {
-        place += 1;
-        let digit: u8 = num_abs.clone().floor().cast();
-        num_abs = num_abs - digit;
-        num_abs *= base;
-        let digit_char = if digit < 10 {
-            (digit + b'0') as char
-        } else {
-            ((digit - 10) + b'A') as char
-        };
-        fractional_part.push(digit_char);
-        offset = place as isize - decimal_place;
-        if offset.rem_euc(3) == 1 {
-            //} && place != num_digits - 1 {
-            fractional_part.push(' ')
-        }
-    }
-    let (int_color, frac_color) = if is_lone {
-        (colors.lone_integer, colors.lone_fraction)
-    } else if is_real {
-        (colors.real_integer, colors.real_fraction)
-    } else {
-        (colors.imaginary_integer, colors.imaginary_fraction)
-    };
+    for digit_number in 0..num_digits {
+        let mut digit: u8 = num_abs.clone().floor().cast();
 
-    let tilde = (num_abs - 0.5f32).abs() > 2f64.pow(-16);
-    if decimal {
-        if integer_part.is_empty() {
-            result.push("0".truecolor(int_color.0, int_color.1, int_color.2));
+        num_abs = num_abs - digit;
+        num_abs *= base;
+        if digit < 10 {
+            digit += b'0'
         } else {
-            result.push(integer_part.truecolor(int_color.0, int_color.1, int_color.2));
+            digit += b'A' - 10
         }
-        result.push(".".truecolor(colors.decimal.0, colors.decimal.1, colors.decimal.2));
-        result.push(trim_zeros(fractional_part).truecolor(
-            frac_color.0,
-            frac_color.1,
-            frac_color.2,
-        ));
-        if tilde {
-            result.push("~".truecolor(colors.tilde.0, colors.tilde.1, colors.tilde.2));
-        } else {
-            result.push(" ".normal());
+        number.push(digit as char);
+        let offset = digit_number as isize - decimal_place;
+        if offset == 0 {
+            number.push('.');
+            decimal = true;
+        } else if offset % 3 == 0 && digit_number != 0 && digit_number != num_digits - 1 {
+            number.push(' ')
         }
+    }
+    if (num_abs - 0.5f32).abs() > 2f64.pow(-16) {
+        number.push('~');
     } else {
-        if integer_part.is_empty() {
-            let mut number = trim_zeros(fractional_part);
-            let first = number.as_bytes()[0];
-            let is_space = first == b' ';
-            if is_space {
-                let mut new_number = "".to_owned();
-                new_number.push(number.as_bytes()[1] as char);
-                new_number.push('.');
-                new_number.push_str(number.split_at(2).1);
-                number = new_number;
-            } else {
-                let mut new_number = "".to_owned();
-                new_number.push(first as char);
-                new_number.push('.');
-                new_number.push_str(number.split_at(1).1);
-                number = new_number;
+        let mut index = number.len() - 1;
+        while index > 0 {
+            if number.as_bytes()[index] != b'0' && number.as_bytes()[index] != b' ' {
+                break;
             }
-            result.push(number.truecolor(frac_color.0, frac_color.1, frac_color.2));
-            if tilde {
-                result.push("~".truecolor(colors.tilde.0, colors.tilde.1, colors.tilde.2));
-            } else {
-                result.push(" ".normal());
-            }
-            result.push(" :".truecolor(colors.colon.0, colors.colon.1, colors.colon.2));
-            if decimal_place < 0 {
-                let mut exponent = "-".to_owned();
-                exponent.push_str(&format_int((-decimal_place) as usize, base as usize));
-                result.push(exponent.truecolor(
-                    colors.exponent.0,
-                    colors.exponent.1,
-                    colors.exponent.2,
-                ));
-            } else {
-                let mut exponent = " ".to_owned();
-                exponent.push_str(&format_int(decimal_place as usize, base as usize));
-                result.push(exponent.truecolor(
-                    colors.exponent.0,
-                    colors.exponent.1,
-                    colors.exponent.2,
-                ));
-            }
+            index -= 1;
+        }
+        number.truncate(index + 1);
+    }
+
+    if !decimal {
+        let first = number.as_bytes()[0];
+        let is_space = first == b' ';
+        if is_space {
+            let mut new_number = "".to_owned();
+            new_number.push(number.as_bytes()[1] as char);
+            new_number.push('.');
+            new_number.push_str(number.split_at(2).1);
+            number = new_number;
         } else {
-            let mut number = trim_zeros(integer_part);
-            let first = number.as_bytes()[0];
-            let is_space = first == b' ';
-            if is_space {
-                let mut new_number = "".to_owned();
-                new_number.push(number.as_bytes()[1] as char);
-                new_number.push('.');
-                new_number.push_str(number.split_at(2).1);
-                number = new_number;
-            } else {
-                let mut new_number = "".to_owned();
-                new_number.push(first as char);
-                new_number.push('.');
-                new_number.push_str(number.split_at(1).1);
-                number = new_number;
-            }
-            result.push(number.truecolor(int_color.0, int_color.1, int_color.2));
-            if tilde {
-                result.push("~".truecolor(colors.tilde.0, colors.tilde.1, colors.tilde.2));
-            } else {
-                result.push(" ".normal());
-            }
-            result.push(" :".truecolor(colors.colon.0, colors.colon.1, colors.colon.2));
-            if decimal_place < 0 {
-                let mut exponent = "-".to_owned();
-                exponent.push_str(&format_int((-decimal_place) as usize, base as usize));
-                result.push(exponent.truecolor(
-                    colors.exponent.0,
-                    colors.exponent.1,
-                    colors.exponent.2,
-                ));
-            } else {
-                let mut exponent = " ".to_owned();
-                exponent.push_str(&format_int(decimal_place as usize, base as usize));
-                result.push(exponent.truecolor(
-                    colors.exponent.0,
-                    colors.exponent.1,
-                    colors.exponent.2,
-                ));
-            }
+            let mut new_number = "".to_owned();
+            new_number.push(first as char);
+            new_number.push('.');
+            new_number.push_str(number.split_at(1).1);
+            number = new_number;
+        }
+        number.push_str(" :");
+        if decimal_place < 0 {
+            number.push('-');
+            number.push_str(&format_int((-decimal_place) as usize, base as usize));
+        } else {
+            number.push(' ');
+            number.push_str(&format_int(decimal_place as usize, base as usize));
         }
     }
-    result
-}
-fn trim_zeros(mut number: String) -> String {
-    let mut index = number.len();
-    while index > 0 {
-        if number.as_bytes()[index - 1] != b'0' && number.as_bytes()[index - 1] != b' ' {
-            break;
-        }
-        index -= 1;
+    if is_positive {
+        format!(" {}", number)
+    } else {
+        format!("-{}", number)
     }
-    number.truncate(index);
-    number
 }
 fn format_int(mut num: usize, base: usize) -> String {
     if num == 0 {
@@ -1172,7 +972,7 @@ fn debug_println(msg: &str) {
     }
 }
 use colored::Colorize;
-fn run_tests(colours: &RGBValues) -> (usize, usize) {
+fn run_tests() -> (usize, usize) {
     let mut base = 10;
     let mut digits = 12;
     let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32;
@@ -1180,55 +980,45 @@ fn run_tests(colours: &RGBValues) -> (usize, usize) {
     let mut rand_state = rand::RandState::new();
 
     let tests = vec![
-        (":baSE C", "Base set to Dozenal (C)."),
-        (":DIGits    \t__\t\t2  0.000", "Precision set to 20 digits."),
-        ("5^-25", "  1.86 BA3 547 200 980 95A 405 483~ :-17"),
-        (
-            "5^-25*[-3.24,-4.1b]",
-            "[-5.58 BA6 424 28A 6A9 238 829 279~ :-17 ,-7.17 49A 618 591 429 757 6B6 511~ :-17 ]",
-        ),
-        // ("-#sIn(@pi/2)", " -1."),
-        // ("#sin(@pi/4)", "  8.59 A69 650 3BA 297 996 256 428~ :-1"),
-        // (":deGreEs", "Angle units set to degrees."),
-        // ("#sin76", "  1."),
-        // (":radiAns", "Angle units set to radians."),
-        ("#sin76", "  0.A88 9AB 897 724 376 B81 A25 541~"),
+        (":base C", "Base set to Dozenal (C)."),
+        (":precision 20", "Precision set to 20 digits."),
+        ("-#sin(@pi/2)", " -1."),
+        ("#sin(@pi/4)", "  8.59 A69 650 3BA 297 996 256 428~ :-1"),
+        (":degrees", "Angle units set to degrees."),
+        ("#sin76", "  1."),
+        (":radians", "Angle units set to radians."),
+        ("#sin76", "  A.88 9AB 897 724 376 B81 A25 541~ :-1"),
         ("(1+2)*3", "  9."),
-        // ("--1+2*3", "  7."),
-        // ("(1+2)*(3+4)", "  19."),
-        // ("1+2*(3+4)", "  13."),
-        // ("((1+2)*3)+4", "  11."),
-        // ("1+(2*3)+4", "  B."),
-        // ("2^(3^2)", "  368."),
-        // ("(2^3)^2", "  54."),
-        // ("#log(100)/2", "  1."),
+        ("--1+2*3", "  7."),
+        ("(1+2)*(3+4)", "  19."),
+        ("1+2*(3+4)", "  13."),
+        ("((1+2)*3)+4", "  11."),
+        ("1+(2*3)+4", "  B."),
+        ("2^(3^2)", "  368."),
+        ("(2^3)^2", "  54."),
+        ("#log(100)/2", "  1."),
         ("(@pi+@e)^2", "  2A.408 353 754 8B8 38B 235 632 3~"),
-        ("1/(1+1/(1+1/(1+1/2)))", "  0.76"),
-        // ("(((1+2)+3)+4)", "  A."),
-        // ("1+(2+(3+4))", "  A."),
-        // ("(1+2+3+4)", "  A."),
-        // ("((())1+2(()))", "Expected number or unary operator!"),
-        // ("(1+2))", "Mismatched parentheses!"),
-        // ("(1+2", "Mismatched parentheses!"),
-        // ("1+*2", "Expected number or unary operator!"),
-        // ("1 2 + 3", "  15."),
-        // ("#sin()", "Expected number or unary operator!"),
-        // ("#sin", "Incomplete expression!"),
-        // ("#sin(#cos())", "Expected number or unary operator!"),
-        // ("1/0", "NaN"),
-        // ("[0,-1]/0", "NaN"),
-        (":debug", "Debug enabled"),
+        ("1/(1+1/(1+1/(1+1/2)))", "  7.6 :-1"),
+        ("(((1+2)+3)+4)", "  A."),
+        ("1+(2+(3+4))", "  A."),
+        ("(1+2+3+4)", "  A."),
+        ("((())1+2(()))", "Expected number or unary operator!"),
+        ("(1+2))", "Mismatched parentheses!"),
+        ("(1+2", "Mismatched parentheses!"),
+        ("1+*2", "Expected number or unary operator!"),
+        ("1 2 + 3", "  15."),
+        ("#sin()", "Expected number or unary operator!"),
+        ("#sin", "Incomplete expression!"),
+        ("#sin(#cos())", "Expected number or unary operator!"),
+        ("1/0", "NaN"),
+        ("[0,-1]/0", "NaN"),
         ("#sqrt-1", "[ 0. , 1. ]"),
         ("#sqrt#sqrt#sqrt194", "  2."),
-        ("-#cos#sin0", " -1."),
-        ("#cos-#sin0", "  1."),
-        ("#cos#sin-0", "  1."),
         ("---#sin---@pi", " -1."),
         (
             "#sqrt(#sqrt-1)",
             "[ 8.59 A69 650 3BA 297 996 256 428~ :-1 , 8.59 A69 650 3BA 297 996 256 428~ :-1 ]",
         ),
-        (":debug", "Debug disabled"),
         ("-3", " -3."),
         ("--3", "  3."),
         ("---3", " -3."),
@@ -1237,92 +1027,57 @@ fn run_tests(colours: &RGBValues) -> (usize, usize) {
         ("1--3", "  4."),
         ("1---3", " -2."),
         ("1----3", "  4."),
-        ("-#sqrt4", " -2."),
-        // ("1.2.3", "Multiple decimals in number!"),
-        // ("#sin#cos@pi", " -A.12 08A A92 234 12B 470 074 934~ :-1"),
-        // ("(1+2)*(3+4", "Mismatched parentheses!"),
-        // ("#log(0)", "NaN"),
-        (":debug", "Debug enabled"),
+        ("1.2.3", "Multiple decimals in number!"),
+        ("#sin#cos@pi", " -A.12 08A A92 234 12B 470 074 934~ :-1"),
+        ("(1+2)*(3+4", "Mismatched parentheses!"),
+        ("#log(0)", "NaN"),
         ("#sqrt(-1-1)", "[ 0. , 1.4B7 917 0A0 7B8 573 770 4B0 85~ ]"),
-        ("#sqrt-1-1", "[-1.,1]"),
-        // ("1/3+1/3+1/3-1", "  0."),
-        // ("@pi@e", "Expected operator!"),
-        // ("#sin()#cos()", "Expected number or unary operator!"),
-        // ("1++2", "Expected number or unary operator!"),
-        // ("((1+2)*3", "Mismatched parentheses!"),
-        // ("1+(2*3", "Mismatched parentheses!"),
-        // ("1 2 3 +", "Incomplete expression!"),
-        // ("1 + + 2", "Expected number or unary operator!"),
+        ("1/3+1/3+1/3-1", "  0."),
+        ("@pi@e", "Expected operator!"),
+        ("#sin()#cos()", "Expected number or unary operator!"),
+        ("1++2", "Expected number or unary operator!"),
+        ("((1+2)*3", "Mismatched parentheses!"),
+        ("1+(2*3", "Mismatched parentheses!"),
+        ("1 2 3 +", "Incomplete expression!"),
+        ("1 + + 2", "Expected number or unary operator!"),
         ("#funky(1)", "Unknown function!"),
-        // ("1 / (2-2)", "NaN"),
-        // ("#sqrt(1+2+3)+)", "Expected number or unary operator!"),
-        // ("(((1+2)*(3+4))+5", "Mismatched parentheses!"),
-        // ("1 2 3 4 5", "  12 345."),
-        // ("*1", "Expected number or unary operator!"),
-        // ("1*", "Incomplete expression!"),
-        // ("()", "Expected number or unary operator!"),
-        // ("#sin", "Incomplete expression!"),
+        ("1 / (2-2)", "NaN"),
+        ("#sqrt(1+2+3)+)", "Expected number or unary operator!"),
+        ("(((1+2)*(3+4))+5", "Mismatched parentheses!"),
+        ("1 2 3 4 5", "  12 345."),
+        ("*1", "Expected number or unary operator!"),
+        ("1*", "Incomplete expression!"),
+        ("()", "Expected number or unary operator!"),
+        ("#sin", "Incomplete expression!"),
         ("123456789abcdef", "Invalid number!"),
-        ("\"text in quotes\"", "invalid input!"),
-        (";*&#@/\\", "invalid input!"),
     ];
 
     let mut passed = 0;
     let total = tests.len();
 
     for (input, expected) in tests {
-        println!("> {}", input);
-
-        let (coloured_result, result) = match tokenize(
-            input,
-            &mut base,
-            &mut precision,
-            &mut digits,
-            &mut radians,
-            colours,
-        ) {
+        println!("Test input: '{}'", input);
+        let result = match tokenize(input, &mut base, &mut precision, &mut digits, &mut radians) {
             Ok(tokens) => {
                 match evaluate_tokens(&tokens, base, precision, &mut rand_state, radians) {
-                    Ok(eval_value) => {
-                        let coloured_vec = num2string(&eval_value, base, digits, &colours);
-                        (coloured_vec.clone(), coloured_vec_to_string(&coloured_vec))
-                    }
-                    Err(err) => (vec![err.red()], err),
+                    Ok(eval_result) => num2string(&eval_result, base, digits),
+                    Err(err) => err,
                 }
             }
-            Err((msg, _)) => (
-                vec![msg.truecolor(colours.message.0, colours.message.1, colours.message.2)],
-                msg,
-            ),
+            Err((msg, _pos)) => msg.to_string(),
         };
 
-        for coloured_string in &coloured_result {
-            print!("{}", coloured_string);
-        }
-        println!();
+        println!("Result    : {}", result);
+        println!("Expected  : {}", expected);
 
         if result == expected {
-            println!("{}", "Pass!".green());
+            println!("{}", "Test passed!".green());
             passed += 1;
         } else {
-            println!("{}", "fail!".red());
-            println!("Sposta: '{}'", expected);
-            println!("Gots  : '{}'", result);
+            println!("{}", "Test failed!".red());
         }
-
         println!();
     }
 
     (passed, total)
-}
-fn coloured_vec_to_string(colored_vec: &Vec<ColoredString>) -> String {
-    let mut result = String::new();
-    for coloured_string in colored_vec {
-        for c in coloured_string.chars() {
-            if c.is_ascii() {
-                result.push(c);
-            }
-        }
-    }
-    result.trim_end().to_owned()
 }
