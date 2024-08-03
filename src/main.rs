@@ -582,7 +582,7 @@ fn parse_number(
 
         if c == b'[' {
             if !token.real_integer.is_empty() || !token.real_fraction.is_empty() {
-                return Err((format!("Unexpected '['"), index));
+                return Err((format!("Unexpected '['!"), index));
             }
             complex = true;
             expect_sign = true;
@@ -605,7 +605,7 @@ fn parse_number(
 
         if c == b',' {
             if !complex {
-                return Err((format!("Unexpected ','"), index));
+                return Err((format!("Unexpected ','!"), index));
             }
             imaginary = true;
             integer = true;
@@ -616,14 +616,14 @@ fn parse_number(
 
         if c == b']' {
             if !complex {
-                return Err((format!("Unexpected ']'"), index));
+                return Err((format!("Unexpected ']'!"), index));
             }
             return Ok(index + 1);
         }
 
         if c == b'.' {
             if !integer {
-                return Err((format!("Multiple decimal points"), index));
+                return Err((format!("Multiple decimals in number!"), index));
             }
             integer = false;
             index += 1;
@@ -685,7 +685,7 @@ fn parse_number(
     }
 
     if complex {
-        return Err((format!("Unclosed complex number"), index));
+        return Err((format!("Unclosed complex number!"), index));
     }
 
     Ok(index)
@@ -1311,39 +1311,45 @@ fn run_tests(colours: &RGBValues) -> (usize, usize) {
             "5^-25*[-3.24,-4.1b]",
             "[-5.58 BA6 424 28A 6A9 238 829 279~ :-17 ,-7.17 49A 618 591 429 757 6B6 511~ :-17 ]",
         ),
-        // ("-#sIn(@pi/2)", " -1."),
-        // ("#sin(@pi/4)", "  8.59 A69 650 3BA 297 996 256 428~ :-1"),
-        // (":deGreEs", "Angle units set to degrees."),
-        // ("#sin76", "  1."),
-        // (":radiAns", "Angle units set to radians."),
+        ("-#sIn(@pi/2)", " -1."),
+        ("#sin(@pi/4)", "  0.859 A69 650 3BA 297 996 256 428~"),
+        (":deGreEs", "Angle units set to degrees."),
+        ("#sin76", "  1."),
+        (":radiAns", "Angle units set to radians."),
         ("#sin76", "  0.A88 9AB 897 724 376 B81 A25 541~"),
         ("(1+2)*3", "  9."),
-        // ("--1+2*3", "  7."),
-        // ("(1+2)*(3+4)", "  19."),
-        // ("1+2*(3+4)", "  13."),
-        // ("((1+2)*3)+4", "  11."),
-        // ("1+(2*3)+4", "  B."),
-        // ("2^(3^2)", "  368."),
-        // ("(2^3)^2", "  54."),
-        // ("#log(100)/2", "  1."),
+        ("--1+2*3", "  7."),
+        ("(1+2)*(3+4)", "  19."),
+        ("1+2*(3+4)", "  13."),
+        ("((1+2)*3)+4", "  11."),
+        ("1+(2*3)+4", "  B."),
+        ("2^(3^2)", "  368."),
+        ("(2^3)^2", "  54."),
+        ("[12,34.56,]","Extra comma in complex number!"),
+        ("[12,34.56,","Extra comma in complex number!"),
+        ("[12,34.56","Unclosed complex number!"),
+        ("[-12.,34.56[1,2]]","Unexpected '['!"),
+        ("[12..,34.56]","Multiple decimals in number!"),
+        ("[,1234.56]","No real portion of complex number!"),
+        ("#log(100)/2", "  1."),
         ("(@pi+@e)^2", "  2A.408 353 754 8B8 38B 235 632 3~"),
         ("1/(1+1/(1+1/(1+1/2)))", "  0.76"),
-        // ("(((1+2)+3)+4)", "  A."),
-        // ("1+(2+(3+4))", "  A."),
-        // ("(1+2+3+4)", "  A."),
-        // ("((())1+2(()))", "Expected number or unary operator!"),
-        // ("(1+2))", "Mismatched parentheses!"),
-        // ("(1+2", "Mismatched parentheses!"),
-        // ("1+*2", "Expected number or unary operator!"),
-        // ("1 2 + 3", "  15."),
-        // ("#sin()", "Expected number or unary operator!"),
-        // ("#sin", "Incomplete expression!"),
-        // ("#sin(#cos())", "Expected number or unary operator!"),
-        // ("1/0", "NaN"),
-        // ("[0,-1]/0", "NaN"),
+        ("(((1+2)+3)+4)", "  A."),
+        ("1+(2+(3+4))", "  A."),
+        ("(1+2+3+4)", "  A."),
+        ("((())1+2(()))", "Expected number or unary operator!"),
+        ("(1+2))", "Mismatched parentheses!"),
+        ("(1+2", "Mismatched parentheses!"),
+        ("1+*2", "Not enough operands for Addition!"),
+        ("1 2 + 3", "  15."),
+        ("#sin()", "Not enough operands for Sine!"),
+        ("#sin", "Incomplete expression!"),
+        ("#sin(#cos())", "Not enough operands for Cosine!"),
+        ("1/0", "NaN"),
+        ("[0,-1]/0", "NaN"),
         (":debug", "Debug enabled"),
         ("#sqrt-1", "[ 0. , 1. ]"),
-        ("#sqrt#sqrt#sqrt194", "  2."),
+        ("#sqrt #sqrt # sqr t1 9  4", "  2."),
         ("-#cos#sin0", " -1."),
         ("#cos-#sin0", "  1."),
         ("#cos#sin-0", "  1."),
@@ -1362,33 +1368,33 @@ fn run_tests(colours: &RGBValues) -> (usize, usize) {
         ("1---3", " -2."),
         ("1----3", "  4."),
         ("-#sqrt4", " -2."),
-        // ("1.2.3", "Multiple decimals in number!"),
-        // ("#sin#cos@pi", " -A.12 08A A92 234 12B 470 074 934~ :-1"),
-        // ("(1+2)*(3+4", "Mismatched parentheses!"),
-        // ("#log(0)", "NaN"),
+        ("1.2.3", "Multiple decimals in number!"),
+        ("#sin#cos@pi", " -A.12 08A A92 234 12B 470 074 934~ :-1"),
+        ("(1+2)*(3+4", "Mismatched parentheses!"),
+        ("#log(0)", "NaN"),
         (":debug", "Debug enabled"),
         ("#sqrt(-1-1)", "[ 0. , 1.4B7 917 0A0 7B8 573 770 4B0 85~ ]"),
         ("#sqrt-1-1", "[-1.,1]"),
-        // ("1/3+1/3+1/3-1", "  0."),
-        // ("@pi@e", "Expected operator!"),
-        // ("#sin()#cos()", "Expected number or unary operator!"),
-        // ("1++2", "Expected number or unary operator!"),
-        // ("((1+2)*3", "Mismatched parentheses!"),
-        // ("1+(2*3", "Mismatched parentheses!"),
-        // ("1 2 3 +", "Incomplete expression!"),
-        // ("1 + + 2", "Expected number or unary operator!"),
+        ("1/3+1/3+1/3-1", "  0."),
+        ("@pi@e", "Invalid expression!"),
+        ("#sin()#cos()", "Not enough operands for Sine!"),
+        ("1++2", "Not enough operands for Addition!"),
+        ("((1+2)*3", "Mismatched parentheses!"),
+        ("1+(2*3", "Mismatched parentheses!"),
+        ("1 2 3 +", "Incomplete expression!"),
+        ("1 *  + 2", "Not enough operands for Multiplication!"),
         ("#funky(1)", "Unknown function!"),
-        // ("1 / (2-2)", "NaN"),
-        // ("#sqrt(1+2+3)+)", "Expected number or unary operator!"),
-        // ("(((1+2)*(3+4))+5", "Mismatched parentheses!"),
-        // ("1 2 3 4 5", "  12 345."),
-        // ("*1", "Expected number or unary operator!"),
-        // ("1*", "Incomplete expression!"),
-        // ("()", "Expected number or unary operator!"),
-        // ("#sin", "Incomplete expression!"),
-        ("123456789abcdef", "Invalid number!"),
-        ("\"text in quotes\"", "invalid input!"),
-        (";*&#@/\\", "invalid input!"),
+        ("1 / (2-2)", "NaN"),
+        ("#sqrt(1+2+3)+)", "Expected number or unary operator!"),
+        ("(((1+2)*(3+4))+5", "Mismatched parentheses!"),
+        ("1 2 3 4 5", "  12 345."),
+        ("*1", "Expected number or unary operator!"),
+        ("1*", "Incomplete expression!"),
+        ("()", "Expected number or unary operator!"),
+        ("#sin", "Incomplete expression!"),
+        ("12345 678 9abcdef", "Invalid number!"),
+        // (";*&#@/\\", "invalid input!"),
+        // ("\"text in quotes\"", "invalid input!"),
     ];
 
     let mut passed = 0;
