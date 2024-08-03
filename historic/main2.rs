@@ -182,19 +182,7 @@ impl Modulus for Complex {
         Complex::with_val(self.prec(), (real, imaginary))
     }
 }
-/// Tokenizes the input string into a vector of Tokens
-/// 
-/// # Arguments
-/// * `input_str` - The input string to tokenize
-/// * `base` - The current number base
-/// * `precision` - The current precision for calculations
-/// * `digits` - The number of digits to display in results
-/// * `radians` - Whether to use radians for trigonometric functions
-/// * `colours` - The colour scheme for output formatting
-/// 
-/// # Returns
-/// * `Ok(Vec<Token>)` - A vector of tokens if successful
-/// * `Err((String, usize))` - An error message and the position of the error
+
 fn tokenize(
     input_str: &str,
     base: &mut u8,
@@ -307,18 +295,6 @@ fn tokenize(
 
     Ok(tokens)
 }
-/// Evaluates a vector of tokens and returns the result
-/// 
-/// # Arguments
-/// * `tokens` - The vector of tokens to evaluate
-/// * `base` - The current number base
-/// * `precision` - The precision for calculations
-/// * `rand_state` - The random state for random number generation
-/// * `radians` - Whether to use radians for trigonometric functions
-/// 
-/// # Returns
-/// * `Ok(Complex)` - The result of the evaluation as a complex number
-/// * `Err(String)` - An error message if evaluation fails
 fn evaluate_tokens(
     tokens: &[Token],
     base: u8,
@@ -394,19 +370,6 @@ fn evaluate_tokens(
 
     Ok(output_queue.pop().unwrap())
 }
-/// Applies an operator to the operands on the output queue
-/// 
-/// # Arguments
-/// * `output_queue` - The queue of operands and intermediate results
-/// * `op` - The operator to apply
-/// * `precision` - The precision for calculations
-/// * `rand_state` - The random state for random number generation
-/// * `base` - The current number base
-/// * `radians` - Whether to use radians for trigonometric functions
-/// 
-/// # Returns
-/// * `Ok(())` - If the operation was successful
-/// * `Err(String)` - An error message if the operation fails
 fn apply_operator(
     output_queue: &mut Vec<Complex>,
     op: char,
@@ -516,15 +479,6 @@ fn apply_operator(
     }
     Ok(())
 }
-/// Parses a constant from the input
-/// 
-/// # Arguments
-/// * `input` - The input byte slice
-/// * `index` - The starting index in the input
-/// 
-/// # Returns
-/// * `Ok((Token, usize))` - The parsed constant token and the new index
-/// * `Err((String, usize))` - An error message and the position of the error
 fn parse_constant(input: &[u8], index: usize) -> Result<(Token, usize), (String, usize)> {
     let constants = [
         ("@e", 'E'),     // e (Euler's number)
@@ -549,18 +503,6 @@ fn parse_constant(input: &[u8], index: usize) -> Result<(Token, usize), (String,
 
     Err((format!("Invalid constant!"), index))
 }
-/// Parses a number from the input and updates the token
-/// 
-/// # Arguments
-/// * `input` - The input byte slice
-/// * `token` - The token to update with the parsed number
-/// * `base` - The current number base
-/// * `index` - The starting index in the input
-/// 
-/// # Returns
-/// * `Ok(usize)` - The new index after parsing the number
-/// * `Err((String, usize))` - An error message and the position of the error
-
 fn parse_number(
     input: &[u8],
     token: &mut Token,
@@ -690,15 +632,6 @@ fn parse_number(
 
     Ok(index)
 }
-/// Parses an operator from the input
-/// 
-/// # Arguments
-/// * `input` - The input byte slice
-/// * `index` - The starting index in the input
-/// 
-/// # Returns
-/// * `Ok((Token, usize))` - The parsed operator token and the new index
-/// * `Err((String, usize))` - An error message and the position of the error
 fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (String, usize)> {
     let operators = [
         // ("operator", 'operator symbol', operands)
@@ -746,20 +679,6 @@ fn parse_operator(input: &[u8], mut index: usize) -> Result<(Token, usize), (Str
 
     Ok((token, index))
 }
-/// Parses a command from the input and updates calculator settings
-/// 
-/// # Arguments
-/// * `input` - The input byte slice
-/// * `index` - The starting index in the input
-/// * `base` - The current number base
-/// * `precision` - The current precision for calculations
-/// * `digits` - The number of digits to display in results
-/// * `radians` - Whether to use radians for trigonometric functions
-/// * `colours` - The colour scheme for output formatting
-/// 
-/// # Returns
-/// * `Ok(Vec<Token>)` - An empty vector (commands don't produce tokens)
-/// * `Err((String, usize))` - A message about the command result and MAX_USIZE
 fn parse_command(
     input: &[u8],
     mut index: usize,
@@ -925,15 +844,6 @@ fn gaussian_complex_random(precision: u32, rand_state: &mut rug::rand::RandState
 
     Complex::with_val(precision, (real, imag))
 }
-/// Converts a token to a complex number
-/// 
-/// # Arguments
-/// * `token` - The token to convert
-/// * `base` - The current number base
-/// * `precision` - The precision for the resulting number
-/// 
-/// # Returns
-/// * `Complex` - The complex number representation of the token
 fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
     let mut real_int = Float::with_val(precision, 0);
     for &digit in &token.real_integer {
@@ -969,16 +879,6 @@ fn token2num(token: &Token, base: u8, precision: u32) -> Complex {
 
     Complex::with_val(precision, (real, imaginary))
 }
-/// Converts a complex number to a vector of coloured strings for display
-/// 
-/// # Arguments
-/// * `num` - The complex number to convert
-/// * `base` - The current number base
-/// * `digits` - The number of digits to display
-/// * `colours` - The colour scheme for output formatting
-/// 
-/// # Returns
-/// * `Vec<ColoredString>` - A vector of coloured strings representing the number
 fn num2string(num: &Complex, base: u8, digits: usize, colours: &RGBValues) -> Vec<ColoredString> {
     let mut result = Vec::new();
 
@@ -1004,18 +904,6 @@ fn num2string(num: &Complex, base: u8, digits: usize, colours: &RGBValues) -> Ve
 
     result
 }
-/// Formats a part of a complex number (real or imaginary) as a vector of coloured strings
-/// 
-/// # Arguments
-/// * `num` - The float number to format
-/// * `base` - The current number base
-/// * `num_digits` - The number of digits to display
-/// * `colours` - The colour scheme for output formatting
-/// * `is_real` - Whether this is the real part of a complex number
-/// * `is_lone` - Whether this is a standalone number (not part of a complex number)
-/// 
-/// # Returns
-/// * `Vec<ColoredString>` - A vector of coloured strings representing the formatted number
 fn format_part(
     num: &rug::Float,
     base: u8,
@@ -1221,19 +1109,6 @@ fn trim_zeros(mut number: String) -> String {
     number.truncate(index);
     number
 }
-/// Formats an integer in the specified base as a string
-/// 
-/// # Arguments
-/// * `num` - The integer to format
-/// * `base` - The base to use for formatting (2 to 36)
-/// 
-/// # Returns
-/// * `String` - The formatted integer as a string
-///
-/// # Notes
-/// - For bases > 10, uses uppercase letters A-Z for digits 10-35
-/// - Returns "0" if the input is 0
-/// - Does not handle negative numbers
 fn format_int(mut num: usize, base: usize) -> String {
     if num == 0 {
         return "0".to_owned();
