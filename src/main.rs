@@ -51,6 +51,7 @@ fn main() -> rustyline::Result<()> {
     };
 
     print_stylized_intro(&colours);
+    print_settings(base, precision, digits, radians, &colours);
     loop {
         let readline = rl.readline("> ");
         match readline {
@@ -134,51 +135,154 @@ fn main() -> rustyline::Result<()> {
 
     Ok(())
 }
-fn print_stylized_intro(colours: &RGBValues) {
-    let ascii_art = r#"
- ____                           _      
-|  _ \                         | |     
-| |_) | __ _ ___  ___  ___ __ _| | ___ 
-|  _ < / _` / __|/ _ \/ __/ _` | |/ __|
-| |_) | (_| \__ \  __/ (_| (_| | | (__ 
-|____/ \__,_|___/\___|\___\__,_|_|\___|
-    "#;
-
-    println!("{}", ascii_art.truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2
-    ));
-
-    println!("{}", "Welcome to Basecalc!".truecolor(
-        colours.decimal.0,
-        colours.decimal.1,
-        colours.decimal.2
-    ).bold());
-
-    println!("\n{}", "Your gateway to mathematical adventures!".truecolor(
+fn print_settings(base: u8, precision: u32, digits: usize, radians: bool, colours: &RGBValues) {
+    print!(
+        "{}",
+        "Base: ".truecolor(
+            colours.lone_integer.0,
+            colours.lone_integer.1,
+            colours.lone_integer.2
+        )
+    );
+    let base_char = if base < 10 {
+        (base + b'0') as char
+    } else {
+        (base - 10 + b'A') as char
+    };
+    print!(
+        "{}",
+        base_char.to_string().truecolor(
+            colours.lone_fraction.0,
+            colours.lone_fraction.1,
+            colours.lone_fraction.2
+        )
+    );
+    print!(" ({})", get_base_name(base).unwrap().truecolor(
         colours.lone_fraction.0,
         colours.lone_fraction.1,
         colours.lone_fraction.2
-    ).italic());
-
-    println!("\n{}", "For help, simply type:".truecolor(
-        colours.lone_integer.0,
-        colours.lone_integer.1,
-        colours.lone_integer.2
     ));
+    print!(
+        "{}",
+        ", Digits: ".truecolor(
+            colours.lone_integer.0,
+            colours.lone_integer.1,
+            colours.lone_integer.2
+        )
+    );
+    print!(
+        "{}",
+        format_int(digits, base as usize).truecolor(
+            colours.lone_fraction.0,
+            colours.lone_fraction.1,
+            colours.lone_fraction.2
+        )
+    );
+    print!(
+        "{}",
+        ", Binary precision: ".truecolor(
+            colours.lone_integer.0,
+            colours.lone_integer.1,
+            colours.lone_integer.2
+        )
+    );
+    print!(
+        "{}",
+        format_int(precision as usize, 10).truecolor(
+            colours.lone_fraction.0,
+            colours.lone_fraction.1,
+            colours.lone_fraction.2
+        )
+    );
+    print!(
+        "{}",
+        ", Trig units: ".truecolor(
+            colours.lone_integer.0,
+            colours.lone_integer.1,
+            colours.lone_integer.2
+        )
+    );
+    println!(
+        "{}",
+        if radians {
+            "radians".truecolor(
+                colours.lone_fraction.0,
+                colours.lone_fraction.1,
+                colours.lone_fraction.2,
+            )
+        } else {
+            "degrees".truecolor(
+                colours.lone_fraction.0,
+                colours.lone_fraction.1,
+                colours.lone_fraction.2,
+            )
+        }
+    );
+}
+fn print_stylized_intro(colours: &RGBValues) {
+    let ascii_art = r#"
+ _                              _      
+| |                            | |     
+| |__   __ _ ___  ___  ___ __ _| | ___ 
+| '_ \ / _` / __|/ _ \/ __/ _` | |/ __|
+| |_) | (_| \__ \  __/ (_| (_| | | (__ 
+|_.__/ \__,_|___/\___|\___\__,_|_|\___|   
+"#;
 
-    println!("{}", ":help".truecolor(
-        colours.exponent.0,
-        colours.exponent.1,
-        colours.exponent.2
-    ).bold());
+    println!(
+        "{}",
+        ascii_art.truecolor(colours.brackets.0, colours.brackets.1, colours.brackets.2)
+    );
 
-    println!("\n{}", "Happy calculating!".truecolor(
-        colours.message.0,
-        colours.message.1,
-        colours.message.2
-    ).bold());
+    println!(
+        "{}",
+        "Welcome to Basecalc!"
+            .truecolor(colours.decimal.0, colours.decimal.1, colours.decimal.2)
+            .bold()
+    );
+
+    println!(
+        "\n{}",
+        "Your gateway to mathematical adventures!"
+            .truecolor(
+                colours.lone_fraction.0,
+                colours.lone_fraction.1,
+                colours.lone_fraction.2
+            )
+            .italic()
+    );
+
+    println!(
+        "\n{}",
+        "For help, simply type:".truecolor(
+            colours.lone_integer.0,
+            colours.lone_integer.1,
+            colours.lone_integer.2
+        )
+    );
+
+    println!(
+        "{}",
+        ":help"
+            .truecolor(colours.exponent.0, colours.exponent.1, colours.exponent.2)
+            .bold()
+    );
+
+    println!(
+        "{}",
+        "Then press 'Enter'!".truecolor(
+            colours.lone_integer.0,
+            colours.lone_integer.1,
+            colours.lone_integer.2
+        )
+    );
+
+    println!(
+        "\n{}",
+        "Happy calculating!"
+            .truecolor(colours.message.0, colours.message.1, colours.message.2)
+            .bold()
+    );
 }
 static OPERATORS: [(&str, char, u8, &str); 27] = [
     // Basic arithmetic
@@ -393,7 +497,7 @@ fn tokenize(
         }
         if start && input[index] == b':' {
             debug_println(&format!("Command detected, parsing command"));
-            return parse_command(
+            match parse_command(
                 input,
                 index + 1,
                 base,
@@ -403,7 +507,11 @@ fn tokenize(
                 colours,
                 rand_state,
                 prev_result,
-            );
+            ) {
+                CommandResult::Success(msg) => return Err((msg, std::usize::MAX)),
+                CommandResult::Error(msg, pos) => return Err((msg, pos)),
+                CommandResult::Silent => return Err(("".to_string(), std::usize::MAX)),
+            }
         }
         if input[index] == b'(' {
             if !start && follows_number {
@@ -1092,6 +1200,14 @@ fn parse_operator(input: &[u8], mut index: usize) -> (Token, usize) {
     }
     (token, index)
 }
+enum CommandResult {
+    /// Command was successful, with a message to display
+    Success(String),
+    /// Command failed, with an error message and the position of the error
+    Error(String, usize),
+    /// Command was successful but requires no message (like :help)
+    Silent,
+}
 /// Parses a command from the input and updates calculator settings
 ///
 /// # Arguments
@@ -1102,10 +1218,13 @@ fn parse_operator(input: &[u8], mut index: usize) -> (Token, usize) {
 /// * `digits` - The number of digits to display in results
 /// * `radians` - Whether to use radians for trigonometric functions
 /// * `colours` - The colour scheme for output formatting
+/// * `rand_state` - The random state for random number generation
+/// * `prev_result` - The previous calculation result
 ///
 /// # Returns
-/// * `Ok(Vec<Token>)` - An empty vector (commands don't produce tokens)
-/// * `Err((String, usize))` - A message about the command result and MAX_USIZE
+/// * `CommandResult::Success(String)` - Command was successful, with a message to display
+/// * `CommandResult::Error(String, usize)` - Command failed, with an error message and the position of the error
+/// * `CommandResult::Silent` - Command was successful but requires no message (like :help)
 fn parse_command(
     input: &[u8],
     mut index: usize,
@@ -1116,12 +1235,11 @@ fn parse_command(
     colours: &RGBValues,
     rand_state: &mut rug::rand::RandState,
     prev_result: &Complex,
-) -> Result<Vec<Token>, (String, usize)> {
-    let message;
+) -> CommandResult {
     match &input[index..] {
         s if s.eq_ignore_ascii_case(b"test") => {
             let (passed, total) = run_tests(colours);
-            message = format!("{}/{} tests passed.", passed, total);
+            CommandResult::Success(format!("{}/{} tests passed.", passed, total))
         }
         s if s.len() >= 4 && s[..4].eq_ignore_ascii_case(b"base") => {
             index += 4;
@@ -1133,7 +1251,7 @@ fn parse_command(
             }
 
             if index >= input.len() {
-                return Err((format!("Missing base value!"), index));
+                return CommandResult::Error("Missing base value!".to_string(), index);
             }
 
             let digit = input[index];
@@ -1144,13 +1262,13 @@ fn parse_command(
             } else if digit.is_ascii_lowercase() {
                 digit - b'a' + 10
             } else {
-                return Err((format!("Invalid base value!"), index));
+                return CommandResult::Error("Invalid base value!".to_string(), index);
             };
             if new_base == 1 || new_base > 36 {
-                return Err((
-                    format!("Base must be between 2 and 36!\nUse ':base 0' for base 36 (Z+1)"),
+                return CommandResult::Error(
+                    "Base must be between 2 and 36!\nUse ':base 0' for base 36 (Z+1)".to_string(),
                     index,
-                ));
+                );
             }
             *base = if new_base == 0 { 36 } else { new_base };
 
@@ -1162,7 +1280,7 @@ fn parse_command(
             };
 
             *precision = (*digits as f64 * (*base as f64).log2()).ceil() as u32 + 32;
-            message = match get_base_name(*base) {
+            let message = match get_base_name(*base) {
                 Some(name) => {
                     if *base == 36 {
                         format!("Base set to {} (Z+1).", name)
@@ -1177,10 +1295,14 @@ fn parse_command(
             index += 1;
             while index < input.len() {
                 if input[index] != b' ' && input[index] != b'_' && input[index] != b'\t' {
-                    return Err((format!("Invalid characters after base value!"), index));
+                    return CommandResult::Error(
+                        "Invalid characters after base value!".to_string(),
+                        index,
+                    );
                 }
                 index += 1;
             }
+            CommandResult::Success(message)
         }
         s if s.len() >= 6 && s[..6].eq_ignore_ascii_case(b"digits") => {
             let token = Token::new();
@@ -1194,7 +1316,10 @@ fn parse_command(
                         || token.imaginary_fraction.len() > 0
                         || token.sign.0
                     {
-                        return Err((format!("Precision must be a positive real integer!"), index));
+                        return CommandResult::Error(
+                            "Precision must be a positive real integer!".to_string(),
+                            index,
+                        );
                     }
 
                     value = token2num(&token, *base, *precision, rand_state, prev_result)
@@ -1203,15 +1328,14 @@ fn parse_command(
                         .round()
                         .to_f64() as usize;
                     if value == 0 {
-                        return Err((format!("Precision must be a positive real integer!"), index));
+                        return CommandResult::Error(
+                            "Precision must be a positive real integer!".to_string(),
+                            index,
+                        );
                     }
-                    message = format!(
-                        "Precision set to {} digits.",
-                        format_int(value, *base as usize)
-                    );
                 }
                 Err((msg, pos)) => {
-                    return Err((msg, pos));
+                    return CommandResult::Error(msg, pos);
                 }
             }
             index = new_index;
@@ -1220,35 +1344,51 @@ fn parse_command(
             if index < input.len() {
                 for i in index..input.len() {
                     if input[i] != b' ' && input[i] != b'_' && input[i] != b'\t' {
-                        return Err((format!("Invalid characters after digits value!"), i));
+                        return CommandResult::Error(
+                            "Invalid characters after digits value!".to_string(),
+                            i,
+                        );
                     }
                 }
             }
             *digits = value;
             *precision = (*digits as f64 * (*base as f64).log2()).ceil() as u32 + 32;
             if token.imaginary_integer.len() > 0 || token.imaginary_fraction.len() > 0 {
-                return Err((format!("Precision must be a real integer!"), index));
+                return CommandResult::Error(
+                    "Precision must be a real integer!".to_string(),
+                    index,
+                );
             }
+            CommandResult::Success(format!(
+                "Precision set to {} digits.",
+                format_int(value, *base as usize)
+            ))
         }
         s if s.len() >= 7 && s[..7].eq_ignore_ascii_case(b"degrees") => {
             // Check if there's anything after the command
             for i in index + 7..input.len() {
                 if input[i] != b' ' && input[i] != b'_' && input[i] != b'\t' {
-                    return Err((format!("Invalid characters after command!"), i));
+                    return CommandResult::Error(
+                        "Invalid characters after command!".to_string(),
+                        i,
+                    );
                 }
             }
             *radians = false;
-            message = format!("Angle units set to degrees.");
+            CommandResult::Success("Angle units set to degrees.".to_string())
         }
         s if s.len() >= 7 && s[..7].eq_ignore_ascii_case(b"radians") => {
             // Check if there's anything after the command
             for i in index + 7..input.len() {
                 if input[i] != b' ' && input[i] != b'_' && input[i] != b'\t' {
-                    return Err((format!("Invalid characters after command!"), i));
+                    return CommandResult::Error(
+                        "Invalid characters after command!".to_string(),
+                        i,
+                    );
                 }
             }
             *radians = true;
-            message = format!("Angle units set to radians.");
+            CommandResult::Success("Angle units set to radians.".to_string())
         }
         s if s.eq_ignore_ascii_case(b"help") => {
             let help_text = get_help_text(
@@ -1263,18 +1403,21 @@ fn parse_command(
             for line in help_text {
                 print!("{}", line);
             }
-            message = "\n".to_string();
+            println!("\n");
+            print_settings(*base, *precision, *digits, *radians, colours);
+            CommandResult::Silent
         }
         s if s.len() >= 5 && s[..5].eq_ignore_ascii_case(b"debug") => {
             // Toggle debug mode
             let new_state = !DEBUG.load(Ordering::Relaxed);
             DEBUG.store(new_state, Ordering::Relaxed);
-            message = format!("Debug {}", if new_state { "enabled" } else { "disabled" });
+            CommandResult::Success(format!(
+                "Debug {}",
+                if new_state { "enabled" } else { "disabled" }
+            ))
         }
-        _ => return Err((format!("Unknown command!"), index)),
-    };
-
-    Err((message, std::usize::MAX))
+        _ => CommandResult::Error("Unknown command!".to_string(), index),
+    }
 }
 fn get_help_text(
     colours: &RGBValues,
@@ -1311,14 +1454,18 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
         (
             ":base ",
             "<digit>  ",
-            "Set the number base (2 to Z+1), use 0 for Z+1",
+            "Set number base (2 to Z+1, 0 for Z+1)",
         ),
-        (":digits ", "<value>", "Set the number of digits to display"),
-        (":radians       ", "", "Set angle units to radians"),
-        (":degrees       ", "", "Set angle units to degrees"),
-        (":help          ", "", "Display this help message"),
-        (":debug         ", "", "Toggle debug mode"),
-        (":test          ", "", "Run internal tests"),
+        (":digits ", "<value>", "Adjust display precision"),
+        (
+            ":radians       ",
+            "",
+            "Switch to radians (for the cool kids)",
+        ),
+        (":degrees       ", "", "Switch to degrees (if you must)"),
+        (":help          ", "", "You're looking at it!"),
+        (":debug         ", "", "Toggle inspection mode"),
+        (":test          ", "", "Ensure calculator isn't a lemon"),
     ];
 
     for (cmd, alt, desc) in commands.iter() {
@@ -1425,33 +1572,6 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
         colours.lone_fraction.2,
     ));
 
-    // Usage
-    help_text.push("\nUsage:\n".truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2,
-    ));
-    let usage_points = [
-        "Enter expressions using operators, functions, and constants.",
-        "Use [] for complex numbers, e.g., [3, 4] for 3 + 4i.",
-        "Use parentheses () to group expressions.",
-        "Spaces are optional in all cases, but can be used for readability.",
-        "Type a command or expression and press 'Enter' to evaluate.",
-        "Case insensitive parsing of all entries.",
-    ];
-    for point in usage_points.iter() {
-        help_text.push("- ".truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2,
-        ));
-        help_text.push(format!("{}\n", point).truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2,
-        ));
-    }
-
     // Examples
     help_text.push("\nExamples:\n".truecolor(
         colours.brackets.0,
@@ -1459,32 +1579,31 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
         colours.brackets.2,
     ));
     let examples = [
-        ("2 + 3 * 4", "Basic arithmetic"),
-        ("#sin(@pi/4)", "Function with constant"),
-        ("[3, 4] * [1, -1]", "Complex number multiplication"),
-        ("#sqrt-1", "Imaginary number"),
-        ("#log(100)/2", "Logarithm and division"),
-        (":base C", "Set base to Dozenal"),
-        (":digits 10", "Set display digits to 10"),
-        ("5^ -25 * [-3.24,-4.1b]", "Exponentiation with complex numbers"),
-        (":base A", "Set base to Decimal"),
-        ("9+1", "Most humans are used to this"),
-        ("#cos(@pi/3)", "Cosine function"),
-        ("#tan #sin(@pi/4)", "Nested trigonometric functions"),
-        ("&^2", "Square the previous result"),
-        ("#ceil 3.7 + #floor(2.1)", "Ceiling and floor functions"),
-        ("@e^#ln2", "Natural exponent and logarithm"),
-        ("#abs[-3,4]", "Absolute value of a complex number"),
-        ("[1,2]/[1,-2]", "Complex division"),
-        (":degrees", "Set angle units to degrees"),
-        ("#asin(0.5)", "Arcsine function in degrees"),
-        ("@rand", "Generate a random number"),
-        ("@grand", "Generate a Gaussian random number"),
-        ("#frac(5.7) + #int(3.2)", "Fractional and integer parts"),
-        ("17%5", "Modulus operation"),
-        (":baseg", "Set base to Hexadecimal"),
-        (":base 2", "Set base to Binary"),
-        (":base A", "Return to Decimal (lame)"),
+        ("2 + 2", "The meaning of life? Not quite, but it's a start."),
+        (":base D", "Switch to base 13, because 12 bases are never enough."),
+        ("6 * 9", "In Tridecimal, this might surprise you..."),
+        ("#sin(@pi/4)", "For when your spaceship needs to make a 45, I mean 36-degree turn."),
+        ("[3, 4] * [1, -1]", "Multiplying complex numbers: it's not rocket science, but it's close."),
+        ("#sqrt-1", "The imaginary unit: i before @e, except after #sqrt."),
+        ("1/2", "But why tho?"),
+        (":base C", "Switch to base 12, see, tridecimal is weird."),
+        ("1/2", "Ah, much better."),
+        (":digits 10", "Adjust precision: for when you need to calculate the cost of a Pan Galactic Gargle Blaster to a dozen digits."),
+        ("-6^(@pi/2) * #ln-2 + #sqrtB / #sin(2*@pi)", "Looks complex? That's because it is!"),
+        (":base A", "Back to decimal. Phew!"),
+        ("42", "The Answer. But what was the Question?"),
+        ("&", "Use the previous result. Handy for building on your last calculation."),
+        ("& + 1", "The Answer plus one. For those who always need a little extra."),
+        ("@pi * 2", "Once around the universe."),
+        ("#cos(2*@pi)", "Whoa, we've gone full circle!"),
+        ("@rand", "Random number: perfect for simulating quantum improbability."),
+        ("@grand", "Gaussian random: for when your probability needs to be normally distributed."),
+        ("#floor(3.14159)", "Rounding down: because sometimes you need to be grounded."),
+        ("17%5", "Modulus: for when you need to know how many Babel fish are left."),
+        (":base G", "Hexadecimal: for the really hoopy froods."),
+        ("FF", "The darkest shade in hex, or just 255 for the less cool."),
+        (":base A", "And we're back to decimal. What a journey!"),
+        ("&", "See?, 255.")
     ];
 
     let mut local_base = base;
@@ -1495,16 +1614,15 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
 
     for (example, desc) in examples.iter() {
         help_text.push(format!("- {}\n", desc).truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2,
+            colours.comma.0,
+            colours.comma.1,
+            colours.comma.2,
         ));
         help_text.push(format!("  {}\n", example).truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2,
+            colours.decimal.0,
+            colours.decimal.1,
+            colours.decimal.2,
         ));
-
         if example.starts_with(':') {
             // Handle commands
             match parse_command(
@@ -1518,14 +1636,23 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
                 rand_state,
                 &local_prev_result,
             ) {
-                Err((msg, _)) => {
+                CommandResult::Success(msg) => {
                     help_text.push(format!("  {}\n", msg).truecolor(
                         colours.message.0,
                         colours.message.1,
                         colours.message.2,
                     ));
                 }
-                _ => {}
+                CommandResult::Error(msg, _) => {
+                    help_text.push(format!("  Error: {}\n", msg).truecolor(
+                        colours.error.0,
+                        colours.error.1,
+                        colours.error.2,
+                    ));
+                }
+                CommandResult::Silent => {
+                    // Do nothing for silent commands
+                }
             }
         } else {
             // Handle expressions
@@ -1579,87 +1706,9 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
         help_text.push("\n".normal());
     }
 
-    // Tips
-    help_text.push("\nTips:\n".truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2,
-    ));
-    let tips = [
-        "Use the '&' symbol to refer to the previous result in calculations.",
-        "Toggle debug mode with ':debug' to see detailed calculation steps.",
-        "Run ':test' to verify calculator functionality.",
-    ];
-    for tip in tips.iter() {
-        help_text.push("- ".truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2,
-        ));
-        help_text.push(format!("{}\n", tip).truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2,
-        ));
-    }
-
-    // Current Settings
-help_text.push("\nCurrent Settings:\n".truecolor(
-    colours.brackets.0,
-    colours.brackets.1,
-    colours.brackets.2,
-));
-
-// Base
-help_text.push("Base: ".truecolor(
-    colours.lone_integer.0,
-    colours.lone_integer.1,
-    colours.lone_integer.2,
-));
-help_text.push(format!("{}\n", base).truecolor(
-    colours.lone_fraction.0,
-    colours.lone_fraction.1,
-    colours.lone_fraction.2,
-));
-
-// Precision
-help_text.push("Precision: ".truecolor(
-    colours.lone_integer.0,
-    colours.lone_integer.1,
-    colours.lone_integer.2,
-));
-help_text.push(format!("{}\n", precision).truecolor(
-    colours.lone_fraction.0,
-    colours.lone_fraction.1,
-    colours.lone_fraction.2,
-));
-
-// Display Digits
-help_text.push("Display Digits: ".truecolor(
-    colours.lone_integer.0,
-    colours.lone_integer.1,
-    colours.lone_integer.2,
-));
-help_text.push(format!("{}\n", digits).truecolor(
-    colours.lone_fraction.0,
-    colours.lone_fraction.1,
-    colours.lone_fraction.2,
-));
-
-// Angle Units
-help_text.push("Angle Units: ".truecolor(
-    colours.lone_integer.0,
-    colours.lone_integer.1,
-    colours.lone_integer.2,
-));
-help_text.push(format!("{}\n", if radians { "Radians" } else { "Degrees" }).truecolor(
-    colours.lone_fraction.0,
-    colours.lone_fraction.1,
-    colours.lone_fraction.2,
-));
-
     help_text.push(
-        "\nFor more detailed information, comments, questions or why 42, contact nick spiker.".normal(),
+        "\nFor more information, comments, neat fractal renders, questions or or why 42, contact nick spiker."
+            .normal(),
     );
 
     help_text

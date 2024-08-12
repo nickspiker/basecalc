@@ -1,6 +1,6 @@
-# Basecalc: Your Towel in the Mathematical Cosmos
+# basecalc: Your Towel in the Mathematical Cosmos
 
-Copyright (C) 2023 Nick Spiker
+Copyright (C) 2024 Nick Spiker
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -17,31 +17,31 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ---
 
-# Basecalc: Your Towel in the Mathematical Cosmos
+# basecalc: Your Towel in the Mathematical Cosmos
 
-Welcome to Basecalc, the ultimate command-line calculator for intergalactic mathematicians, quantum physicists, and anyone who's ever wondered how to split the bill at the Restaurant at the End of the Universe!
+Welcome to basecalc, the ultimate command-line calculator for intergalactic mathematicians, quantum physicists, and anyone who's ever needed to split the bill at the Restaurant at the End of the Universe!
 
 ```
- ____                           _      
-|  _ \                         | |     
-| |_) | __ _ ___  ___  ___ __ _| | ___ 
-|  _ < / _` / __|/ _ \/ __/ _` | |/ __|
+ _                              _      
+| |                            | |     
+| |__   __ _ ___  ___  ___ __ _| | ___ 
+| '_ \ / _` / __|/ _ \/ __/ _` | |/ __|
 | |_) | (_| \__ \  __/ (_| (_| | | (__ 
-|____/ \__,_|___/\___|\___\__,_|_|\___|
+|_.__/ \__,_|___/\___|\___\__,_|_|\___|   
 ```
 
 ## 🚀 Key Features
 
-- **Arbitrary Base Calculations**: From Binary to Hexatrigesimal (base 2 to Z+1), because who knows what number system non humans use?
+- **Arbitrary Base Calculations**: From Binary to Hexatrigesimal (base 2 to Z+1), because who knows what number system the others use?
 - **Complex Number Wizardry**: Juggle real and imaginary numbers like a cosmic jester.
 - **Precision to Rival a Neutrino Detector**: Adjustable digit precision for when you absolutely need to know the 1000th digit of pi in base 7.
-- **Trigonometric Functions**: Calculate sine waves for your intergalactic surfing adventures.
-- **Constants at Your Fingertips**: π, e, and other mathematical celebrities are always ready to party.
+- **Trigonometric Functions**: Calculate the waves needed for your intergalactic surfing adventures.
+- **Constants at Your Fingertips**: π, e, and other mathematical celebrities are always at the ready.
 - **Previous Result Recall**: Use '&' to reference your last calculation, perfect for building fractals in the terminal.
 
 ## 🧮 How to Use
 
-1. Launch Basecalc
+1. Launch basecalc
 2. Type your mathematical musings
 3. Press Enter
 4. Marvel at the results
@@ -49,9 +49,9 @@ Welcome to Basecalc, the ultimate command-line calculator for intergalactic math
 
 ## 🔢 Entering Numbers
 
-Numbers in Basecalc are like tribbles - they come in all shapes and sizes. At least all that are allowed for 0-9 plus A-Z:
+Numbers in basecalc are like tribbles - they come in all shapes and sizes. At least all that are allowed for 0-9 plus A-Z:
 
-- Regular numbers: `42`, `@pi`, `4R3.6A74cg7FF`
+- Regular numbers: `42`, `@pi`, `4R3.6A74cg7FR`
 - Complex numbers: `[3, 4]` (That's 3 + 4i for you Earth-dwellers)
 
 Spaces, tabs, and underscores are ignored, so feel free to make your numbers as readable as a Vogon poetry book.
@@ -63,7 +63,7 @@ Spaces, tabs, and underscores are ignored, so feel free to make your numbers as 
 - `:radians` / `:degrees`: Toggle between radians and degrees, useful for both interstellar navigation and pizza slicing.
 - `:help`: Summon the Guide (that's me!) for assistance.
 - `:debug`: Peek behind the curtain of the mathematical matrix.
-- `:test`: Ensure your calculator isn't suffering from a Babel fish infestation.
+- `:test`: Ensure your calculator isn't suffering from a Babelfish infestation.
 
 ## 🧠 Operators and Functions
 
@@ -75,8 +75,8 @@ Spaces, tabs, and underscores are ignored, so feel free to make your numbers as 
 ### Unary Operators
 - `#abs`: Absolute value, for numbers with identity crises.
 - `#sqrt`: Square root, the mathematical equivalent of splitting an atom.
-- `#ln`, `#log`: Natural and base logarithms, for when your numbers need to get down to earth.
-- `#sin`, `#cos`, `#tan`: Trigonometric functions, essential for wave-surfing through spacetime.
+- `#ln`, `#log`: Natural and current base logarithms, for when your numbers need to get down to earth.
+- `#sin`, `#cos`, `#tan`: Trigonometric functions, essential for surfing thru spacetime.
 - `#asin`, `#acos`, `#atan`: Inverse trig, for when you need to undo your sinful calculations.
 - `#ceil`, `#floor`, `#round`: For when you need to flatten the curve of your results.
 - `#re`, `#im`: Extract real and imaginary parts, like separating Siamese twins.
@@ -85,7 +85,7 @@ Spaces, tabs, and underscores are ignored, so feel free to make your numbers as 
 - `@pi`: π, the circle's best friend.
 - `@e`: e, the natural choice for exponential explorers.
 - `@gamma`: The Euler-Mascheroni constant, for those who like their math extra crispy.
-- `@rand`: Random number generator, for when you need to simulate quantum uncertainty.
+- `@rand`: Random number generator, for when you need to simulate uncertainty.
 - `@grand`: Gaussian random number, because sometimes your randomness needs a bell curve.
 
 ## 🌟 Examples
@@ -118,7 +118,7 @@ Base set to Decimal (A).
 
 ## 🚀 Installation
 
-1. Clone this repository faster than light speed:
+1. Clone this repository as fast as light:
    ```
    git clone https://github.com/yourusername/basecalc.git
    ```
@@ -137,12 +137,32 @@ Base set to Decimal (A).
 
 ## 🌌 Contributing
 
-Found a bug? Have an idea for a feature that would make Basecalc even more cosmic? Contributions are welcome! Open an issue or submit a pull request, and let's make Basecalc the calculator that even Deep Thought would be jealous of.
+Found a bug? Have an idea for a feature that would make basecalc even more cosmic? Contributions are welcome! Open an issue or submit a pull request, and let's make basecalc the calculator that even Deep Thought would be jealous of.
 
 ## 📜 License
 
-Basecalc is free software, just like the answer to life, the universe, and everything. It's licensed under [insert your license here], because sharing is caring, especially when it comes to interdimensional calculators.
+Basecalc is free software, just like the answer to life, the universe, and everything. It's licensed under the GNU General Public License v3.0 (GPLv3), because we believe in the power of open source to drive innovation across the galaxy.
+
+### What this means for you:
+
+1. **Freedom to Use**: You can use Basecalc for any purpose, be it calculating the odds of successfully navigating an asteroid field or determining the exact amount of Pangalactic Gargleblasters needed for a party.
+
+2. **Freedom to Study**: You have the right to study how Basecalc works and adapt it to your needs. The source code is your playground!
+
+3. **Freedom to Share**: You can copy and distribute Basecalc to your fellow hitchhikers, ensuring that no one in the universe is without a towel or a powerful calculator.
+
+4. **Freedom to Improve**: You can enhance Basecalc and release your improvements to the public. Maybe you'll add a function to calculate the probability of improbability?
+
+### The Copyleft Principle:
+
+The GPL is a copyleft license, which means that any derivative work you distribute must also be licensed under the GPL. This ensures that the freedoms are passed on to all users of Basecalc and its derivatives.
+
+### Why GPL?
+
+We chose the GPL because we believe that software, like knowledge, should be free and open. By using the GPL, we ensure that Basecalc remains free software, even as it evolves and improves over time.
+
+For the full text of the license, please see the [LICENSE](LICENSE) file in the Basecalc repository. Remember, understanding software licenses is almost as important as knowing where your towel is!
 
 ---
 
-Remember, DON'T PANIC, and always know where your Basecalc is! Happy calculating, and may your computations be swift and your errors be few!
+Remember, DON'T PANIC, and always know where your basecalc is! Happy calculating, and may your computations be swift and your errors be few!
