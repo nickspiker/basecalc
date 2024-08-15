@@ -15,76 +15,57 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 use az::Cast;
 use colored::*;
+use dirs;
 use rug::ops::*;
 use rug::*;
-use rustyline::{error::ReadlineError, Config, DefaultEditor};
+use std::fs;
+use std::io::{self, Write};
+use std::io::{Error, ErrorKind};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use termion::event::Key;
+use termion::input::TermRead;
+use termion::raw::IntoRawMode;
+use vsf::vsf::*;
 fn main() -> rustyline::Result<()> {
-    let config = Config::builder().build();
-    let mut rl = DefaultEditor::with_config(config)?;
-
-    let mut base = 10;
-    let mut digits = 12;
-    let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32;
-    let mut radians = true;
-    let mut rand_state = rand::RandState::new();
-    let mut prev_result = Complex::with_val(precision, 0);
-
-    let colours = RGBValues {
-        lone_integer: (0x94, 0xc9, 0x9b),
-        lone_fraction: (0x6a, 0xce, 0xb0),
-        real_integer: (0x81, 0xc6, 0xdc),
-        real_fraction: (0xa5, 0xbe, 0xe7),
-        imaginary_integer: (0xe5, 0xae, 0xa0),
-        imaginary_fraction: (0xf9, 0xa0, 0xc8),
-        exponent: (0x9C, 0x27, 0xB0),
-        decimal: (0xFF, 0xff, 0xff),
-        sign: (0xF4, 0x43, 0x36),
-        tilde: (0x78, 0x90, 0xCC),
-        carat: (0xFF, 0xC1, 0x07),
-        error: (0xE5, 0x39, 0x35),
-        brackets: (0x8B, 0xC3, 0x4A),
-        comma: (0xBD, 0xBD, 0xBD),
-        colon: (0x78, 0x90, 0x9C),
-        nan: (0xc0, 0x0D, 0xfB),
-        message: (0x9E, 0x35, 0xe1),
+    let mut state = match load_state() {
+        Some(s) => {
+            // Initialize DEBUG atomic boolean from loaded state
+            DEBUG.store(s.debug, Ordering::Relaxed);
+            debug_println(&format!(
+                "Loaded state: Base: {}, Digits: {}, Radians: {}, History: {} entries, Debug: {}",
+                s.base,
+                s.digits,
+                s.radians,
+                s.history.len(),
+                s.debug
+            ));
+            for (i, entry) in s.history.iter().enumerate() {
+                debug_println(&format!("Loaded history entry {}: {}", i, entry));
+            }
+            s
+        }
+        None => {
+            debug_println("Using default state");
+            BasecalcState::new()
+        }
     };
 
-    print_stylized_intro(&colours);
-    print_settings(base, precision, digits, radians, &colours);
-    loop {
-        let readline = rl.readline("> ");
-        match readline {
-            Ok(line) => {
-                if line.is_empty() {
-                    println!("Goodbye!");
-                    break;
-                }
-                rl.add_history_entry(line.clone())?;
+    print_stylized_intro(&state.colours);
+    print_settings(&state);
 
+    loop {
+        let entry = terminal_line_entry(&mut state);
+        println!();
+        match entry {
+            Ok(Some(line)) => {
                 debug_println(&format!("Processing input: '{}'", line));
-                match tokenize(
-                    &line,
-                    &mut base,
-                    &mut precision,
-                    &mut digits,
-                    &mut radians,
-                    &colours,
-                    &mut rand_state,
-                    &prev_result,
-                ) {
+                match tokenize(&line, &mut state) {
                     Ok(tokens) => {
-                        match evaluate_tokens(
-                            &tokens,
-                            base,
-                            precision,
-                            &mut rand_state,
-                            radians,
-                            &prev_result,
-                        ) {
+                        match evaluate_tokens(&tokens, &mut state) {
                             Ok(result) => {
-                                let result_vec = num2string(&result, base, digits, &colours);
-                                prev_result = result;
+                                let result_vec = num2string(&result, &state);
+                                state.prev_result = result;
                                 for coloured_string in result_vec {
                                     print!("{}", coloured_string);
                                 }
@@ -92,7 +73,11 @@ fn main() -> rustyline::Result<()> {
                             }
                             Err(err) => println!(
                                 "{}",
-                                err.truecolor(colours.error.0, colours.error.1, colours.error.2)
+                                err.truecolor(
+                                    state.colours.error.0,
+                                    state.colours.error.1,
+                                    state.colours.error.2
+                                )
                             ),
                         }
 
@@ -103,31 +88,44 @@ fn main() -> rustyline::Result<()> {
                             println!(
                                 "{}",
                                 msg.truecolor(
-                                    colours.message.0,
-                                    colours.message.1,
-                                    colours.message.2
+                                    state.colours.message.0,
+                                    state.colours.message.1,
+                                    state.colours.message.2
                                 )
                             );
                         } else {
                             println!(
                                 "  {}{}",
                                 " ".repeat(pos),
-                                "^".truecolor(colours.carat.0, colours.carat.1, colours.carat.2)
+                                "^".truecolor(
+                                    state.colours.carat.0,
+                                    state.colours.carat.1,
+                                    state.colours.carat.2
+                                )
                             );
                             println!(
                                 "{}",
-                                msg.truecolor(colours.error.0, colours.error.1, colours.error.2)
+                                msg.truecolor(
+                                    state.colours.error.0,
+                                    state.colours.error.1,
+                                    state.colours.error.2
+                                )
                             );
                         }
                     }
                 }
+                // Save state after each entry
+                state.debug = DEBUG.load(Ordering::Relaxed);
+                if let Err(e) = save_state(&state) {
+                    eprintln!("Failed to save state: {}", e);
+                }
             }
-            Err(ReadlineError::Interrupted) => {
-                println!("Pressing enter with no input will exit as well.");
+            Ok(None) => {
+                println!("Goodbye!");
                 break;
             }
-            Err(err) => {
-                println!("{:?}", err);
+            Err(e) => {
+                eprintln!("Error: {:?}", e);
                 break;
             }
         }
@@ -135,7 +133,926 @@ fn main() -> rustyline::Result<()> {
 
     Ok(())
 }
-fn print_settings(base: u8, precision: u32, digits: usize, radians: bool, colours: &RGBValues) {
+fn terminal_line_entry(state: &mut BasecalcState) -> io::Result<Option<String>> {
+    let mut stdout = io::stdout().into_raw_mode()?;
+    let stdin = io::stdin();
+    let mut chars = stdin.keys();
+    let mut user_input = String::new();
+
+    loop {
+        write!(stdout, "\r\x1B[2K> {}", state.current_entry)?;
+        stdout.flush()?;
+
+        if let Some(Ok(key)) = chars.next() {
+            match key {
+                Key::Up => {
+                    if state.history_index < state.history.len() {
+                        state.history_index += 1;
+                        let index = state.history.len() - state.history_index;
+                        if state.history[index].starts_with(&user_input) {
+                            state.current_entry = state.history[index].clone();
+                        }
+                    }
+                }
+                Key::Down => {
+                    if state.history_index > 0 {
+                        state.history_index -= 1;
+                        if state.history_index == 0 {
+                            state.current_entry = user_input.clone();
+                        } else {
+                            let index = state.history.len() - state.history_index;
+                            if state.history[index].starts_with(&user_input) {
+                                state.current_entry = state.history[index].clone();
+                            }
+                        }
+                    }
+                }
+                Key::Char('\n') => {
+                    if state.current_entry.is_empty() {
+                        return Ok(None);
+                    }
+                    let entry = state.current_entry.clone();
+                    state.history.push(entry.clone());
+                    state.current_entry.clear();
+                    user_input.clear();
+                    state.history_index = 0;
+                    return Ok(Some(entry));
+                }
+                Key::Char(c) => {
+                    state.current_entry.push(c);
+                    user_input.push(c);
+                }
+                Key::Backspace => {
+                    state.current_entry.pop();
+                    user_input.pop();
+                }
+                Key::Ctrl('c') => {
+                    writeln!(stdout, "\nInterrupted")?;
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+fn get_state_file_path() -> PathBuf {
+    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("basecalc");
+    fs::create_dir_all(&path).expect("Failed to create config directory");
+    path.push("state.vsf");
+    path
+}
+fn save_state(state: &BasecalcState) -> std::io::Result<()> {
+    let path = get_state_file_path();
+    let temp_path = path.with_extension("vsf-");
+
+    let vsf_data = create_vsf_data(state)?;
+
+    let mut file = fs::File::create(&temp_path)?;
+    file.write_all(&vsf_data)?;
+    file.sync_all()?;
+
+    fs::rename(temp_path, path)?;
+    Ok(())
+}
+fn load_state() -> Option<BasecalcState> {
+    let path = get_state_file_path();
+    debug_println(&mut format!("Attempting to load state from: {:?}", path));
+
+    if path.exists() {
+        match fs::read(&path) {
+            Ok(data) => {
+                debug_println("File read successfully");
+                let mut pointer = 0;
+                match parse_vsf(&data, &mut pointer) {
+                    Ok(state) => {
+                        // Update the DEBUG atomic boolean
+                        DEBUG.store(state.debug, Ordering::Relaxed);
+                        debug_println(&format!("Debug mode set to: {}", state.debug));
+
+                        debug_println("State parsed successfully");
+                        Some(state)
+                    }
+                    Err(e) => {
+                        eprintln!("Error parsing state file: {}", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading state file: {}", e);
+                None
+            }
+        }
+    } else {
+        debug_println("State file does not exist");
+        None
+    }
+}
+fn parse_vsf(data: &[u8], pointer: &mut usize) -> Result<BasecalcState, std::io::Error> {
+    debug_println(&format!("Starting VSF parsing"));
+
+    // Check magic number
+    if data.len() < 4 || &data[0..3] != b"R\xC3\x85" {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Magic number does not match 'RÅ' at decimal offset {} bytes",
+                *pointer
+            ),
+        ));
+    }
+    *pointer = 3;
+    debug_println(&format!("Magic number 'RÅ' verified"));
+
+    // Check for opening angle bracket
+    if data[*pointer] != b'<' {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Expected header opening '<' after magic number at decimal offset {} bytes",
+                *pointer
+            ),
+        ));
+    }
+    *pointer += 1;
+    debug_println(&format!("Opening angle bracket '<' found"));
+
+    // Parse header length
+    let header_length = parse(data, pointer)?;
+    let header_length_bytes;
+    if let VsfType::b(length) = header_length {
+        if length % 8 != 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Header length is not a multiple of 8 at decimal offset {} bytes",
+                    *pointer
+                ),
+            ));
+        }
+        header_length_bytes = length / 8;
+        debug_println(&format!(
+            "Header length: {} bits ({} bytes)",
+            length, header_length_bytes
+        ));
+    } else {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Expected header length of type 'b' at decimal offset {} bytes",
+                *pointer
+            ),
+        ));
+    }
+
+    // Parse version and backward version
+    let first = parse(data, pointer)?;
+    let second = parse(data, pointer)?;
+
+    let (_version, backward_version) = match (&first, &second) {
+        (VsfType::z(v), VsfType::y(bv)) => {
+            debug_println(&format!("Version: {}, Backward version: {}", v, bv));
+            (*v, *bv)
+        }
+        (VsfType::y(bv), VsfType::z(v)) => {
+            debug_println(&format!("Version: {}, Backward version: {}", v, bv));
+            (*v, *bv)
+        }
+        _ => {
+            return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Expected version (z) and backward version (y) at decimal offset {} bytes, found {:?} and {:?}",
+                *pointer, first, second
+            ),
+        ));
+        }
+    };
+
+    if backward_version > 1 {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("Unsupported backward version {}!", backward_version),
+        ));
+    }
+
+    // Parse label definition count
+    let label_count_vsf = parse(data, pointer)?;
+    let label_count;
+    if let VsfType::c(count) = label_count_vsf {
+        label_count = count;
+        debug_println(&format!("Label count: {}", label_count));
+    } else {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Expected label count 'c' at decimal offset {} bytes",
+                *pointer
+            ),
+        ));
+    }
+
+    let mut basecalc_offset = 0;
+    let mut basecalc_size = 0;
+    let mut basecalc_count = 0;
+
+    // Parse label definitions
+    debug_println(&format!("Parsing label definitions"));
+    for i in 0..label_count {
+        debug_println(&format!(
+            "Parsing label definition {}/{}",
+            i + 1,
+            label_count
+        ));
+        if data[*pointer] != b'(' {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Expected label set definition '(' at decimal offset {} bytes",
+                    *pointer
+                ),
+            ));
+        }
+        *pointer += 1;
+
+        if let VsfType::d(label_str) = parse(data, pointer)? {
+            debug_println(&format!("Found label: {}", label_str));
+            if label_str == "basecalc state" {
+                let mut offset = None;
+                let mut size = None;
+                let mut count = None;
+
+                // Parse offset, size, and count in any order
+                while data[*pointer] != b')' {
+                    match parse(data, pointer)? {
+                        VsfType::o(o) => {
+                            debug_println(&format!("basecalc state offset: {}", o));
+                            offset = Some(o);
+                        }
+                        VsfType::b(s) => {
+                            debug_println(&format!("basecalc state size: {}", s));
+                            size = Some(s);
+                        }
+                        VsfType::c(c) => {
+                            debug_println(&format!("basecalc state count: {}", c));
+                            count = Some(c);
+                        }
+                        _ => {
+                            debug_println(&format!(
+                                "Ignoring unknown type for future compatibility"
+                            ));
+                        }
+                    }
+                }
+
+                basecalc_offset = offset.ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "Missing offset for basecalc state")
+                })?;
+                basecalc_size = size.ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "Missing size for basecalc state")
+                })?;
+                basecalc_count = count.ok_or_else(|| {
+                    Error::new(ErrorKind::InvalidData, "Missing count for basecalc state")
+                })?;
+            } else {
+                debug_println(&format!("Skipping unknown label: {}", label_str));
+                // Skip other label definitions
+                while data[*pointer] != b')' {
+                    parse(data, pointer)?;
+                }
+            }
+        } else {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Expected label 'd' at decimal offset {} bytes", *pointer),
+            ));
+        }
+
+        if data[*pointer] != b')' {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Expected ')' at end of label definition at decimal offset {} bytes",
+                    *pointer
+                ),
+            ));
+        }
+        *pointer += 1;
+    }
+
+    // Check for closing angle bracket
+    if data[*pointer] != b'>' {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Expected header closing '>' at decimal offset {} bytes",
+                *pointer
+            ),
+        ));
+    }
+    *pointer += 1;
+    debug_println(&format!("Header closing '>' found"));
+
+    if *pointer != header_length_bytes {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "Header length mismatch: expected {} bytes, got {} bytes",
+                header_length_bytes, pointer
+            ),
+        ));
+    }
+
+    // Initialize basecalc state with default values
+    let mut base = 0;
+    let mut digits = 0;
+    let mut radians_flag: u8 = 3; // 3 indicates missing value
+    let mut history = Vec::new();
+    let mut debug_flag = false;
+
+    let mut history_offset;
+    let mut history_size;
+    let mut history_count;
+
+    // Parse basecalc state if found
+    if basecalc_offset > 0 && basecalc_size > 0 && basecalc_count > 0 {
+        debug_println(&format!("Parsing basecalc state"));
+        // Move pointer to basecalc state data
+        *pointer = (basecalc_offset / 8) as usize;
+        debug_println(&format!(
+            "Moved pointer to basecalc state data at offset: {}",
+            *pointer
+        ));
+
+        // Parse label set
+        if data[*pointer] != b'[' {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Expected '[' for label set at decimal offset {} bytes",
+                    *pointer
+                ),
+            ));
+        }
+        *pointer += 1;
+
+        for i in 0..basecalc_count {
+            debug_println(&format!(
+                "Parsing basecalc state label {}/{}",
+                i + 1,
+                basecalc_count
+            ));
+            if data[*pointer] != b'(' {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "Expected '(' for label at decimal offset {} bytes",
+                        *pointer
+                    ),
+                ));
+            }
+            *pointer += 1;
+
+            let label = parse(data, pointer)?;
+            if let VsfType::d(label_str) = label {
+                debug_println(&format!("Found basecalc state label: {}", label_str));
+                match label_str.as_str() {
+                    "base" => {
+                        if data[*pointer] != b':' {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "Expected ':' after 'base' label at decimal offset {} bytes",
+                                    *pointer
+                                ),
+                            ));
+                        }
+                        *pointer += 1;
+                        if let VsfType::u3(value) = parse(data, pointer)? {
+                            base = value;
+                            debug_println(&format!("Parsed base: {}", base));
+                        } else {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "Expected u3 type for 'base' at decimal offset {} bytes",
+                                    *pointer
+                                ),
+                            ));
+                        }
+                    }
+                    "digits" => {
+                        if data[*pointer] != b':' {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "Expected ':' after 'digits' label at decimal offset {} bytes",
+                                    *pointer
+                                ),
+                            ));
+                        }
+                        *pointer += 1;
+                        match parse(data, pointer)? {
+                            VsfType::u(value) => {
+                                digits = value as usize;
+                            }
+                            VsfType::u3(value) => {
+                                digits = value as usize;
+                            }
+                            VsfType::u4(value) => {
+                                digits = value as usize;
+                            }
+                            VsfType::u5(value) => {
+                                digits = value as usize;
+                            }
+                            VsfType::u6(value) => {
+                                digits = value as usize;
+                            }
+                            VsfType::u7(value) => {
+                                digits = value as usize;
+                            }
+                            _ => {
+                                return Err(Error::new(
+                                    ErrorKind::InvalidData,
+                                    format!(
+                                        "Expected u type for 'digits' at decimal offset {} bytes",
+                                        *pointer
+                                    ),
+                                ));
+                            }
+                        }
+                        debug_println(&format!("Parsed digits: {}", digits));
+                    }
+                    "radians" => {
+                        if data[*pointer] != b':' {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "Expected ':' after 'radians' label at decimal offset {} bytes",
+                                    *pointer
+                                ),
+                            ));
+                        }
+                        *pointer += 1;
+                        let a = parse(data, pointer);
+                        if let VsfType::u0(value) = a? {
+                            radians_flag = if value { 1 } else { 0 };
+                            debug_println(&format!("Parsed radians: {}", radians_flag));
+                        } else {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "Expected u0 type for 'radians' at decimal offset {} bytes",
+                                    *pointer
+                                ),
+                            ));
+                        }
+                    }
+                    "history" => {
+                        let mut offset = None;
+                        let mut size = None;
+                        let mut count = None;
+
+                        if data[*pointer] != b':' {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "Expected ':' after 'history' label at decimal offset {} bytes",
+                                    *pointer
+                                ),
+                            ));
+                        }
+                        *pointer += 1;
+
+                        // Parse offset, size, and count in any order
+                        while data[*pointer] != b')' {
+                            match parse(data, pointer)? {
+                                VsfType::o(o) => {
+                                    debug_println(&format!("basecalc history offset: {}", o / 8));
+                                    offset = Some(o);
+                                }
+                                VsfType::b(s) => {
+                                    debug_println(&format!("basecalc history size: {}", s / 8));
+                                    size = Some(s);
+                                }
+                                VsfType::c(c) => {
+                                    debug_println(&format!("basecalc history count: {}", c));
+                                    count = Some(c);
+                                }
+                                _ => {
+                                    debug_println(&format!(
+                                        "Ignoring unknown type for future compatibility"
+                                    ));
+                                }
+                            }
+                        }
+
+                        history_offset = offset.ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::InvalidData,
+                                "Missing offset for basecalc history",
+                            )
+                        })?;
+                        history_size = size.ok_or_else(|| {
+                            Error::new(ErrorKind::InvalidData, "Missing size for basecalc history")
+                        })?;
+                        history_count = count.ok_or_else(|| {
+                            Error::new(ErrorKind::InvalidData, "Missing count for basecalc history")
+                        })?;
+
+                        let mut history_pointer = (history_offset / 8) as usize;
+                        debug_println(&format!(
+                            "Moved pointer to basecalc history data at offset: {}",
+                            history_pointer
+                        ));
+
+                        // Parse history entries
+                        for entry in 0..history_count {
+                            debug_println(&format!(
+                                "Parsing basecalc history entry {}/{}",
+                                entry + 1,
+                                history_count
+                            ));
+                            match parse(data, &mut history_pointer)? {
+                                VsfType::x(mut entry) => {
+                                    if entry.ends_with('\n') {
+                                        entry.truncate(entry.len() - 1);
+                                    } else {
+                                        return Err(Error::new(
+                                            ErrorKind::InvalidData,
+                                            format!(
+                                                "Expected newline at end of history entry at decimal offset {} bytes",
+                                                history_pointer
+                                            ),
+                                        ));
+                                    }
+                                    debug_println(&format!("Parsed history entry: {}", entry));
+                                    history.push(entry);
+                                }
+                                _ => {
+                                    return Err(Error::new(
+                                        ErrorKind::InvalidData,
+                                        format!(
+                                            "Expected x type for history entry at decimal offset {} bytes",
+                                            history_pointer
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                        if history_pointer != (history_offset + history_size) / 8 {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "History length mismatch: expected {} bytes, got {} bytes",
+                                    history_size, history_pointer
+                                ),
+                            ));
+                        }
+                    }
+                    "DEBUG" => {
+                        if data[*pointer] != b':' {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "Expected ':' after 'DEBUG' label at decimal offset {} bytes",
+                                    *pointer
+                                ),
+                            ));
+                        }
+                        *pointer += 1;
+                        let a = parse(data, pointer);
+                        if let VsfType::u0(value) = a? {
+                            debug_flag = value;
+                            debug_println(&format!("Parsed DEBUG: {}", debug_flag));
+                        } else {
+                            return Err(Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "Expected u0 type (boolean) for 'DEBUG' at decimal offset {} bytes",
+                                    *pointer
+                                ),
+                            ));
+                        }
+                    }
+                    _ => {
+                        debug_println(&format!(
+                            "Skipping unknown basecalc state label: {}",
+                            label_str
+                        ));
+                        // Skip unknown labels
+                        while data[*pointer] != b')' {
+                            if data[*pointer] == b':' {
+                                *pointer += 1;
+                            } else {
+                                parse(data, pointer)?;
+                            }
+                        }
+                    }
+                }
+            } else {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "Expected label of type 'd' at decimal offset {} bytes",
+                        *pointer
+                    ),
+                ));
+            }
+
+            if data[*pointer] != b')' {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "Expected ')' after label value at decimal offset {} bytes",
+                        *pointer
+                    ),
+                ));
+            }
+            *pointer += 1;
+        }
+
+        if data[*pointer] != b']' {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Expected ']' at end of label set at decimal offset {} bytes",
+                    *pointer
+                ),
+            ));
+        }
+        *pointer += 1;
+        debug_println(&format!("Finished parsing basecalc state"));
+    } else {
+        debug_println(&format!("No basecalc state found in the file"));
+    }
+
+    // Check if we got valid data
+    debug_println(&format!("Checking validity of parsed data"));
+    if base == 0 || digits == 0 || radians_flag == 3 || history.is_empty() {
+        if base == 0 {
+            debug_println(&format!("Error: Missing base"));
+            return Err(Error::new(ErrorKind::InvalidData, "Missing base"));
+        }
+        if digits == 0 {
+            debug_println(&format!("Error: Missing digits"));
+            return Err(Error::new(ErrorKind::InvalidData, "Missing digits"));
+        }
+        if radians_flag == 3 {
+            debug_println(&format!("Error: Missing radians flag"));
+            return Err(Error::new(ErrorKind::InvalidData, "Missing radians"));
+        }
+        if history.is_empty() {
+            debug_println(&format!("Error: Missing history"));
+            return Err(Error::new(ErrorKind::InvalidData, "Missing history"));
+        }
+    }
+
+    let radians = radians_flag == 1;
+    debug_println(&format!("Final parsed values:"));
+    debug_println(&format!("  Base: {}", base));
+    debug_println(&format!("  Digits: {}", digits));
+    debug_println(&format!("  Radians: {}", radians));
+    debug_println(&format!("  History entries: {}", history.len()));
+
+    debug_println(&format!("VSF parsing completed successfully"));
+    let mut state = BasecalcState::new();
+    state.base = base;
+    state.digits = digits;
+    state.set_precision();
+    state.radians = radians;
+    state.history = history;
+    state.debug = debug_flag;
+    Ok(state)
+}
+#[derive(Clone)]
+struct BasecalcState {
+    base: u8,
+    digits: usize,
+    precision: u32,
+    padding: u32,
+    radians: bool,
+    current_entry: String,
+    history_index: usize,
+    history: Vec<String>,
+    debug: bool,
+    rand_state: rand::RandState<'static>,
+    prev_result: Complex,
+    colours: RGBValues,
+}
+
+impl BasecalcState {
+    fn new() -> Self {
+        let base = 10;
+        let digits = 12;
+        let precision = 0;
+        let mut state = BasecalcState {
+            base,
+            digits,
+            precision,
+            padding: 32,
+            radians: true,
+            current_entry: String::new(),
+            history_index: 0,
+            history: Vec::new(),
+            debug: false,
+            rand_state: rand::RandState::new(),
+            prev_result: Complex::with_val(1, 0),
+            colours: RGBValues {
+                lone_integer: (0x94, 0xc9, 0x9b),
+                lone_fraction: (0x6a, 0xce, 0xb0),
+                real_integer: (0x81, 0xc6, 0xdc),
+                real_fraction: (0xa5, 0xbe, 0xe7),
+                imaginary_integer: (0xe5, 0xae, 0xa0),
+                imaginary_fraction: (0xf9, 0xa0, 0xc8),
+                exponent: (0x9C, 0x27, 0xB0),
+                decimal: (0xFF, 0xff, 0xff),
+                sign: (0xF4, 0x43, 0x36),
+                tilde: (0x78, 0x90, 0xCC),
+                carat: (0xFF, 0xC1, 0x07),
+                error: (0xE5, 0x39, 0x35),
+                brackets: (0x8B, 0xC3, 0x4A),
+                comma: (0xBD, 0xBD, 0xBD),
+                colon: (0x78, 0x90, 0x9C),
+                nan: (0xc0, 0x0D, 0xfB),
+                message: (0x9E, 0x35, 0xe1),
+            },
+        };
+        state.set_precision();
+        state.prev_result = Complex::with_val(state.precision, 0);
+        state
+    }
+    fn set_precision(&mut self) {
+        self.precision =
+            (self.digits as f64 * (self.base as f64).log2()).ceil() as u32 + self.padding;
+    }
+}
+fn create_vsf_data(basecalc_state: &BasecalcState) -> Result<Vec<u8>, std::io::Error> {
+    let mut history_entries_combined = Vec::new();
+    for entry in &basecalc_state.history {
+        let entry_with_return = entry.clone() + "\n";
+        history_entries_combined.append(&mut VsfType::x(entry_with_return).flatten()?);
+    }
+    let mut vsf = vec!["RÅ".as_bytes().to_owned()];
+
+    // Header
+    let mut header_index = 0;
+    vsf[header_index].append(&mut b"<".to_vec());
+    let header_length_index = vsf.len();
+    let mut header_length = 42;
+    vsf.push(VsfType::b(header_length).flatten()?); // Placeholder for header length in bits, always first
+    header_index = vsf.len();
+    vsf.push(VsfType::z(1).flatten()?); // Version
+    vsf[header_index].append(&mut VsfType::y(1).flatten()?); // Backward version
+    vsf[header_index].append(&mut VsfType::c(1).flatten()?); // label definition count
+    vsf[header_index].append(&mut b"(".to_vec()); // Start of label definition
+    vsf[header_index].append(&mut VsfType::d("basecalc state".to_string()).flatten()?); // VsfType d for the data type
+    let label_offset_index = vsf.len();
+    let mut label_offset = 42;
+    vsf.push(VsfType::o(label_offset).flatten()?); // Placeholder for offset to basecalc state
+    let label_size_index = vsf.len();
+    let mut label_size = 42;
+    vsf.push(VsfType::b(label_size).flatten()?); // Placeholder for size of basecalc state
+    header_index = vsf.len();
+    vsf.push(VsfType::c(5).flatten()?); // Number of elements in basecalc state
+    vsf[header_index].append(&mut b")".to_vec());
+    vsf[header_index].append(&mut b">".to_vec());
+    let header_end_index = vsf.len();
+
+    // Label set
+    header_index = vsf.len();
+    vsf.push(b"[".to_vec());
+    vsf[header_index].append(&mut b"(".to_vec());
+    vsf[header_index].append(&mut VsfType::d("base".to_string()).flatten()?);
+    vsf[header_index].append(&mut b":".to_vec());
+    vsf[header_index].append(&mut VsfType::u3(basecalc_state.base).flatten()?);
+    vsf[header_index].append(&mut b")".to_vec());
+
+    vsf[header_index].append(&mut b"(".to_vec());
+    vsf[header_index].append(&mut VsfType::d("digits".to_string()).flatten()?);
+    vsf[header_index].append(&mut b":".to_vec());
+    vsf[header_index].append(&mut VsfType::u(basecalc_state.digits).flatten()?);
+    vsf[header_index].append(&mut b")".to_vec());
+
+    vsf[header_index].append(&mut b"(".to_vec());
+    vsf[header_index].append(&mut VsfType::d("radians".to_string()).flatten()?);
+    vsf[header_index].append(&mut b":".to_vec());
+    vsf[header_index].append(&mut VsfType::u0(basecalc_state.radians).flatten()?);
+    vsf[header_index].append(&mut b")".to_vec());
+
+    vsf[header_index].append(&mut b"(".to_vec());
+    vsf[header_index].append(&mut VsfType::d("history".to_string()).flatten()?);
+    vsf[header_index].append(&mut b":".to_vec());
+    let history_offset_index = vsf.len();
+    let mut history_offset = 42;
+    vsf.push(VsfType::o(history_offset).flatten()?);
+    header_index = vsf.len();
+    vsf.push(VsfType::b(history_entries_combined.len() * 8).flatten()?);
+    vsf[header_index].append(&mut VsfType::c(basecalc_state.history.len()).flatten()?);
+    vsf[header_index].append(&mut b")".to_vec());
+
+    vsf[header_index].append(&mut b"(".to_vec());
+    vsf[header_index].append(&mut VsfType::d("DEBUG".to_string()).flatten()?);
+    vsf[header_index].append(&mut b":".to_vec());
+    vsf[header_index].append(&mut VsfType::u0(basecalc_state.debug).flatten()?);
+    vsf[header_index].append(&mut b")".to_vec());
+
+    vsf[header_index].append(&mut b"]".to_vec());
+
+    let mut prev_header_length = 0;
+    let mut prev_label_offset = 0;
+    let mut prev_label_size = 0;
+    let mut prev_history_offset = 0;
+
+    while header_length != prev_header_length
+        || label_offset != prev_label_offset
+        || label_size != prev_label_size
+        || history_offset != prev_history_offset
+    {
+        prev_header_length = header_length;
+        prev_label_offset = label_offset;
+        prev_label_size = label_size;
+        prev_history_offset = history_offset;
+
+        header_length = 0;
+        for i in 0..header_end_index {
+            header_length += vsf[i].len();
+        }
+        vsf[header_length_index] = VsfType::b(header_length * 8).flatten()?;
+
+        label_offset = header_length;
+        vsf[label_offset_index] = VsfType::o(label_offset * 8).flatten()?;
+
+        label_size = 0;
+        for i in header_end_index..vsf.len() {
+            let mut vsfi = "".to_owned();
+            for index in 0..vsf[i].len() {
+                let id = vsf[i][index];
+                if id >= 32 && id <= 126 {
+                    vsfi.push(id as char);
+                } else {
+                    vsfi.push(' ');
+                }
+            }
+            label_size += vsf[i].len();
+        }
+        vsf[label_size_index] = VsfType::b(label_size * 8).flatten()?;
+
+        history_offset = label_offset + label_size;
+        vsf[history_offset_index] = VsfType::o(history_offset * 8).flatten()?;
+    }
+
+    vsf.push(history_entries_combined);
+
+    let vsf_vector: Vec<u8> = vsf.into_iter().flatten().collect();
+    if DEBUG.load(Ordering::Relaxed) {
+        print_colorized_vsf(&vsf_vector);
+    }
+    Ok(vsf_vector)
+}
+fn print_colorized_vsf(vsf_data: &[u8]) {
+    let mut first_line = String::new();
+    let mut second_line = String::new();
+
+    for &byte in vsf_data {
+        if is_keyboard_printable(byte) {
+            first_line.push_str(&format!("{}", (byte as char).to_string().green()));
+            second_line.push(' ');
+        } else {
+            let hex = format!("{:02X}", byte).as_bytes().to_owned();
+            first_line.push_str(&format!("{}", (hex[0] as char).to_string().red()));
+            second_line.push_str(&format!("{}", (hex[1] as char).to_string().red()));
+        }
+    }
+    let mut index_lines = Vec::new();
+    for line_count in 0..(vsf_data.len() as f64).log10().floor() as usize + 1 {
+        let mut line = String::new();
+        for i in 0..vsf_data.len() {
+            let i_trunc = i / (10usize).pow(line_count as u32);
+            if i_trunc > 0 {
+                line.push_str(&format!("{}", i_trunc % 10));
+            } else {
+                line.push(' ');
+            }
+        }
+        index_lines.push(line.blue());
+    }
+
+    println!("{}", second_line);
+    println!("{}", first_line);
+    for line in index_lines {
+        println!("{}", line);
+    }
+}
+fn is_keyboard_printable(byte: u8) -> bool {
+    match byte {
+        32..=126 => true, // Printable ASCII characters (including space)
+        _ => false,
+    }
+}
+fn print_settings(state: &BasecalcState) {
+    let colours = &state.colours;
     print!(
         "{}",
         "Base: ".truecolor(
@@ -144,10 +1061,10 @@ fn print_settings(base: u8, precision: u32, digits: usize, radians: bool, colour
             colours.lone_integer.2
         )
     );
-    let base_char = if base < 10 {
-        (base + b'0') as char
+    let base_char = if state.base < 10 {
+        (state.base + b'0') as char
     } else {
-        (base - 10 + b'A') as char
+        (state.base - 10 + b'A') as char
     };
     print!(
         "{}",
@@ -157,11 +1074,14 @@ fn print_settings(base: u8, precision: u32, digits: usize, radians: bool, colour
             colours.lone_fraction.2
         )
     );
-    print!(" ({})", get_base_name(base).unwrap().truecolor(
-        colours.lone_fraction.0,
-        colours.lone_fraction.1,
-        colours.lone_fraction.2
-    ));
+    print!(
+        " ({})",
+        get_base_name(state.base).unwrap().truecolor(
+            colours.lone_fraction.0,
+            colours.lone_fraction.1,
+            colours.lone_fraction.2
+        )
+    );
     print!(
         "{}",
         ", Digits: ".truecolor(
@@ -172,23 +1092,7 @@ fn print_settings(base: u8, precision: u32, digits: usize, radians: bool, colour
     );
     print!(
         "{}",
-        format_int(digits, base as usize).truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2
-        )
-    );
-    print!(
-        "{}",
-        ", Binary precision: ".truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2
-        )
-    );
-    print!(
-        "{}",
-        format_int(precision as usize, 10).truecolor(
+        format_int(state.digits, state.base as usize).truecolor(
             colours.lone_fraction.0,
             colours.lone_fraction.1,
             colours.lone_fraction.2
@@ -204,7 +1108,7 @@ fn print_settings(base: u8, precision: u32, digits: usize, radians: bool, colour
     );
     println!(
         "{}",
-        if radians {
+        if state.radians {
             "radians".truecolor(
                 colours.lone_fraction.0,
                 colours.lone_fraction.1,
@@ -332,6 +1236,7 @@ static CONSTANTS: [(&str, char, &str); 6] = [
     ("@grand", 'g', "Gaussian random number"),
     ("&", '&', "Previous result"),
 ];
+#[derive(Clone)]
 struct RGBValues {
     lone_integer: (u8, u8, u8),
     lone_fraction: (u8, u8, u8),
@@ -371,7 +1276,6 @@ struct Token {
     sign: (bool, bool),
 }
 use std::fmt;
-
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn number_vector_to_string(vec: &[u8]) -> String {
@@ -413,7 +1317,6 @@ impl fmt::Display for Token {
         write!(f, "]")
     }
 }
-
 impl Token {
     fn new() -> Token {
         Token {
@@ -460,20 +1363,11 @@ impl Modulus for Complex {
 /// # Returns
 /// * `Ok(Vec<Token>)` - A vector of tokens if successful
 /// * `Err((String, usize))` - An error message and the position of the error
-fn tokenize(
-    input_str: &str,
-    base: &mut u8,
-    precision: &mut u32,
-    digits: &mut usize,
-    radians: &mut bool,
-    colours: &RGBValues,
-    rand_state: &mut rug::rand::RandState,
-    prev_result: &Complex,
-) -> Result<Vec<Token>, (String, usize)> {
+fn tokenize(input_str: &str, state: &mut BasecalcState) -> Result<Vec<Token>, (String, usize)> {
     debug_println(&format!("\nTokenizing: {}", input_str));
     debug_println(&format!(
         "Initial state: base={}, precision={}, digits={}, radians={}",
-        base, precision, digits, radians
+        state.base, state.precision, state.digits, state.radians
     ));
 
     let input = input_str.as_bytes();
@@ -497,17 +1391,7 @@ fn tokenize(
         }
         if start && input[index] == b':' {
             debug_println(&format!("Command detected, parsing command"));
-            match parse_command(
-                input,
-                index + 1,
-                base,
-                precision,
-                digits,
-                radians,
-                colours,
-                rand_state,
-                prev_result,
-            ) {
+            match parse_command(input, index + 1, state) {
                 CommandResult::Success(msg) => return Err((msg, std::usize::MAX)),
                 CommandResult::Error(msg, pos) => return Err((msg, pos)),
                 CommandResult::Silent => return Err(("".to_string(), std::usize::MAX)),
@@ -567,7 +1451,7 @@ fn tokenize(
                     debug_println(&format!("Not a constant, trying to parse as number"));
                 }
             }
-            match parse_number(input, base.clone(), index) {
+            match parse_number(input, state.base, index) {
                 Ok((token, new_index)) => {
                     debug_println(&format!("Parsed number: {}", token));
                     tokens.push(token);
@@ -655,14 +1539,7 @@ fn tokenize(
 /// # Returns
 /// * `Ok(Complex)` - The result of the evaluation as a complex number
 /// * `Err(String)` - An error message if evaluation fails
-fn evaluate_tokens(
-    tokens: &[Token],
-    base: u8,
-    precision: u32,
-    rand_state: &mut rug::rand::RandState,
-    radians: bool,
-    prev_result: &Complex,
-) -> Result<Complex, String> {
+fn evaluate_tokens(tokens: &[Token], state: &mut BasecalcState) -> Result<Complex, String> {
     debug_println("\nEvaluating tokens:");
     let mut output_queue: Vec<Complex> = Vec::new();
     let mut operator_stack: Vec<char> = Vec::new();
@@ -672,7 +1549,7 @@ fn evaluate_tokens(
         match token.operands {
             0 => {
                 // Number or constant
-                let mut value = token2num(token, base, precision, rand_state, prev_result);
+                let mut value = token2num(token, state);
                 debug_println(&format!("Processing number: {}", value));
 
                 // Apply all stacked unary operators
@@ -680,7 +1557,7 @@ fn evaluate_tokens(
                     if get_precedence(op) == Precedence::Unary {
                         debug_println(&format!("Applying stacked unary operator: {}", op));
                         let operator = operator_stack.pop().unwrap();
-                        value = apply_unary_operator(operator, value, precision, base, radians)?;
+                        value = apply_unary_operator(operator, value, &state)?;
                     } else {
                         break;
                     }
@@ -704,13 +1581,7 @@ fn evaluate_tokens(
                             operator_stack.pop();
                             break;
                         }
-                        apply_operator(
-                            &mut output_queue,
-                            operator_stack.pop().unwrap(),
-                            precision,
-                            base,
-                            radians,
-                        )?;
+                        apply_operator(&mut output_queue, operator_stack.pop().unwrap(), state)?;
                     }
                     // Apply function if there's one immediately before the parenthesis
                     if let Some(&op) = operator_stack.last() {
@@ -718,9 +1589,7 @@ fn evaluate_tokens(
                             apply_operator(
                                 &mut output_queue,
                                 operator_stack.pop().unwrap(),
-                                precision,
-                                base,
-                                radians,
+                                state,
                             )?;
                         }
                     }
@@ -739,13 +1608,7 @@ fn evaluate_tokens(
                     if op == '(' || get_precedence(token.operator) > get_precedence(op) {
                         break;
                     }
-                    apply_operator(
-                        &mut output_queue,
-                        operator_stack.pop().unwrap(),
-                        precision,
-                        base,
-                        radians,
-                    )?;
+                    apply_operator(&mut output_queue, operator_stack.pop().unwrap(), state)?;
                 }
                 operator_stack.push(token.operator);
                 debug_println(&format!(
@@ -765,7 +1628,7 @@ fn evaluate_tokens(
             return Err("Mismatched parentheses".to_string());
         }
         debug_println(&format!("Applying remaining operator: {}", op));
-        apply_operator(&mut output_queue, op, precision, base, radians)?;
+        apply_operator(&mut output_queue, op, state)?;
     }
 
     if output_queue.len() != 1 {
@@ -777,9 +1640,7 @@ fn evaluate_tokens(
 fn apply_operator(
     output_queue: &mut Vec<Complex>,
     op: char,
-    precision: u32,
-    base: u8,
-    radians: bool,
+    state: &mut BasecalcState,
 ) -> Result<(), String> {
     debug_println(&format!("Applying operator: {}", op));
     match op {
@@ -787,7 +1648,7 @@ fn apply_operator(
         'n' | 'a' | 'O' | 'o' | 'S' | 'T' | 'c' | 'f' | 'F' | 'i' | 'I' | 'l' | 'L' | 'e' | 'r'
         | 'g' | 's' | 'q' | 't' | 'A' => {
             if let Some(value) = output_queue.pop() {
-                let result = apply_unary_operator(op, value, precision, base, radians)?;
+                let result = apply_unary_operator(op, value, state)?;
                 output_queue.push(result);
             } else {
                 return Err(format!("Not enough operands for {}", op));
@@ -797,7 +1658,6 @@ fn apply_operator(
     }
     Ok(())
 }
-
 fn get_precedence(op: char) -> Precedence {
     match op {
         '+' | '-' => Precedence::Addition,
@@ -812,9 +1672,7 @@ fn get_precedence(op: char) -> Precedence {
 fn apply_unary_operator(
     op: char,
     value: Complex,
-    precision: u32,
-    base: u8,
-    radians: bool,
+    state: &BasecalcState,
 ) -> Result<Complex, String> {
     debug_println(&format!(
         "Applying unary operator: {} to value: {}",
@@ -825,69 +1683,70 @@ fn apply_unary_operator(
         'a' => value.abs(),
         'S' => {
             let rad_result = value.asin();
-            if radians {
+            if state.radians {
                 rad_result
             } else {
-                rad_result * 180.0 / Float::with_val(precision, rug::float::Constant::Pi)
+                rad_result * 180.0 / Float::with_val(state.precision, rug::float::Constant::Pi)
             }
         }
         'O' => {
             let rad_result = value.acos();
-            if radians {
+            if state.radians {
                 rad_result
             } else {
-                rad_result * 180.0 / Float::with_val(precision, rug::float::Constant::Pi)
+                rad_result * 180.0 / Float::with_val(state.precision, rug::float::Constant::Pi)
             }
         }
         'T' => {
             let rad_result = value.atan();
-            if radians {
+            if state.radians {
                 rad_result
             } else {
-                rad_result * 180.0 / Float::with_val(precision, rug::float::Constant::Pi)
+                rad_result * 180.0 / Float::with_val(state.precision, rug::float::Constant::Pi)
             }
         }
         'c' => gaussian_ceil(&value),
         'f' => gaussian_floor(&value),
         'F' => fractional_part(&value),
-        'i' => Complex::with_val(precision, (value.imag(), 0)),
+        'i' => Complex::with_val(state.precision, (value.imag(), 0)),
         'I' => integer_part(&value),
         'l' => value.ln(),
-        'L' => value.ln() / Float::with_val(precision, base).ln(),
-        'e' => Complex::with_val(precision, (value.real(), 0)),
+        'L' => value.ln() / Float::with_val(state.precision, state.base).ln(),
+        'e' => Complex::with_val(state.precision, (value.real(), 0)),
         'r' => gaussian_round(&value),
         'g' => sign(&value),
         'q' => value.sqrt(),
         's' => {
-            if radians {
+            if state.radians {
                 value.sin()
             } else {
-                let pi = Float::with_val(precision, rug::float::Constant::Pi);
-                (value * pi / Float::with_val(precision, 180.0)).sin()
+                let pi = Float::with_val(state.precision, rug::float::Constant::Pi);
+                (value * pi / Float::with_val(state.precision, 180.0)).sin()
             }
         }
         'o' => {
-            if radians {
+            if state.radians {
                 value.cos()
             } else {
-                let pi = Float::with_val(precision, rug::float::Constant::Pi);
-                (value * pi / Float::with_val(precision, 180.0)).cos()
+                let pi = Float::with_val(state.precision, rug::float::Constant::Pi);
+                (value * pi / Float::with_val(state.precision, 180.0)).cos()
             }
         }
         't' => {
-            if radians {
+            if state.radians {
                 value.tan()
             } else {
-                let pi = Float::with_val(precision, rug::float::Constant::Pi);
-                (value * pi / Float::with_val(precision, 180.0)).tan()
+                let pi = Float::with_val(state.precision, rug::float::Constant::Pi);
+                (value * pi / Float::with_val(state.precision, 180.0)).tan()
             }
         }
         'A' => {
-            let rad_result = Complex::with_val(precision, value.imag().clone().atan2(value.real()));
-            if radians {
+            let rad_result =
+                Complex::with_val(state.precision, value.imag().clone().atan2(value.real()));
+            if state.radians {
                 rad_result
             } else {
-                rad_result * 180.0 / Float::with_val(precision, rug::float::Constant::Pi)
+                rad_result * 180.0 / Float::with_val(state.precision, rug::float::Constant::Pi)
             }
         }
         _ => return Err(format!("Unknown unary operator: {}", op)),
@@ -935,33 +1794,27 @@ fn apply_binary_operator(output_queue: &mut Vec<Complex>, op: char) -> Result<()
     }
     Ok(())
 }
-
 fn gaussian_ceil(z: &Complex) -> Complex {
     Complex::with_val(z.prec(), (z.real().clone().ceil(), z.imag().clone().ceil()))
 }
-
 fn gaussian_floor(z: &Complex) -> Complex {
     Complex::with_val(
         z.prec(),
         (z.real().clone().floor(), z.imag().clone().floor()),
     )
 }
-
 fn fractional_part(z: &Complex) -> Complex {
     z - gaussian_floor(z)
 }
-
 fn integer_part(z: &Complex) -> Complex {
     gaussian_floor(z)
 }
-
 fn gaussian_round(z: &Complex) -> Complex {
     Complex::with_val(
         z.prec(),
         (z.real().clone().round(), z.imag().clone().round()),
     )
 }
-
 fn sign(z: &Complex) -> Complex {
     if z.is_zero() {
         z.clone()
@@ -1225,20 +2078,10 @@ enum CommandResult {
 /// * `CommandResult::Success(String)` - Command was successful, with a message to display
 /// * `CommandResult::Error(String, usize)` - Command failed, with an error message and the position of the error
 /// * `CommandResult::Silent` - Command was successful but requires no message (like :help)
-fn parse_command(
-    input: &[u8],
-    mut index: usize,
-    base: &mut u8,
-    precision: &mut u32,
-    digits: &mut usize,
-    radians: &mut bool,
-    colours: &RGBValues,
-    rand_state: &mut rug::rand::RandState,
-    prev_result: &Complex,
-) -> CommandResult {
+fn parse_command(input: &[u8], mut index: usize, state: &mut BasecalcState) -> CommandResult {
     match &input[index..] {
         s if s.eq_ignore_ascii_case(b"test") => {
-            let (passed, total) = run_tests(colours);
+            let (passed, total) = run_tests();
             CommandResult::Success(format!("{}/{} tests passed.", passed, total))
         }
         s if s.len() >= 4 && s[..4].eq_ignore_ascii_case(b"base") => {
@@ -1270,19 +2113,19 @@ fn parse_command(
                     index,
                 );
             }
-            *base = if new_base == 0 { 36 } else { new_base };
+            state.base = if new_base == 0 { 36 } else { new_base };
 
-            let base_char = match *base {
-                0..=9 => (*base as u8 + b'0') as char,
-                10..=35 => (*base as u8 - 10 + b'A') as char,
+            let base_char = match state.base {
+                0..=9 => (state.base as u8 + b'0') as char,
+                10..=35 => (state.base as u8 - 10 + b'A') as char,
                 36 => 'Z',
                 _ => '?',
             };
 
-            *precision = (*digits as f64 * (*base as f64).log2()).ceil() as u32 + 32;
-            let message = match get_base_name(*base) {
+            state.set_precision();
+            let message = match get_base_name(state.base) {
                 Some(name) => {
-                    if *base == 36 {
+                    if state.base == 36 {
                         format!("Base set to {} (Z+1).", name)
                     } else {
                         format!("Base set to {} ({}).", name, base_char)
@@ -1308,7 +2151,7 @@ fn parse_command(
             let token = Token::new();
             let value;
             let new_index;
-            match parse_number(input, base.clone(), index + 6) {
+            match parse_number(input, state.base, index + 6) {
                 Ok((token, x)) => {
                     new_index = x;
                     if token.real_fraction.len() > 0
@@ -1322,11 +2165,7 @@ fn parse_command(
                         );
                     }
 
-                    value = token2num(&token, *base, *precision, rand_state, prev_result)
-                        .real()
-                        .clone()
-                        .round()
-                        .to_f64() as usize;
+                    value = token2num(&token, state).real().clone().round().to_f64() as usize;
                     if value == 0 {
                         return CommandResult::Error(
                             "Precision must be a positive real integer!".to_string(),
@@ -1351,8 +2190,8 @@ fn parse_command(
                     }
                 }
             }
-            *digits = value;
-            *precision = (*digits as f64 * (*base as f64).log2()).ceil() as u32 + 32;
+            state.digits = value;
+            state.set_precision();
             if token.imaginary_integer.len() > 0 || token.imaginary_fraction.len() > 0 {
                 return CommandResult::Error(
                     "Precision must be a real integer!".to_string(),
@@ -1361,7 +2200,7 @@ fn parse_command(
             }
             CommandResult::Success(format!(
                 "Precision set to {} digits.",
-                format_int(value, *base as usize)
+                format_int(value, state.base as usize)
             ))
         }
         s if s.len() >= 7 && s[..7].eq_ignore_ascii_case(b"degrees") => {
@@ -1374,7 +2213,7 @@ fn parse_command(
                     );
                 }
             }
-            *radians = false;
+            state.radians = false;
             CommandResult::Success("Angle units set to degrees.".to_string())
         }
         s if s.len() >= 7 && s[..7].eq_ignore_ascii_case(b"radians") => {
@@ -1387,24 +2226,16 @@ fn parse_command(
                     );
                 }
             }
-            *radians = true;
+            state.radians = true;
             CommandResult::Success("Angle units set to radians.".to_string())
         }
         s if s.eq_ignore_ascii_case(b"help") => {
-            let help_text = get_help_text(
-                colours,
-                *base,
-                *precision,
-                *digits,
-                *radians,
-                rand_state,
-                prev_result,
-            );
+            let help_text = get_help_text(&state);
             for line in help_text {
                 print!("{}", line);
             }
             println!("\n");
-            print_settings(*base, *precision, *digits, *radians, colours);
+            print_settings(state);
             CommandResult::Silent
         }
         s if s.len() >= 5 && s[..5].eq_ignore_ascii_case(b"debug") => {
@@ -1419,22 +2250,15 @@ fn parse_command(
         _ => CommandResult::Error("Unknown command!".to_string(), index),
     }
 }
-fn get_help_text(
-    colours: &RGBValues,
-    base: u8,
-    precision: u32,
-    digits: usize,
-    radians: bool,
-    rand_state: &mut rug::rand::RandState,
-    prev_result: &Complex,
-) -> Vec<ColoredString> {
+fn get_help_text(global_state: &BasecalcState) -> Vec<ColoredString> {
+    let mut local_state = global_state.clone();
     let mut help_text: Vec<ColoredString> = Vec::new();
 
     // Geeky Intro
     help_text.push("Welcome to basecalc!\n".truecolor(
-        colours.decimal.0,
-        colours.decimal.1,
-        colours.decimal.2,
+        local_state.colours.decimal.0,
+        local_state.colours.decimal.1,
+        local_state.colours.decimal.2,
     ));
     help_text.push("
 Greetings, intrepid mathematical explorer!  This isn't just any ordinary number-crunching gizmo - it's your towel in the cosmos!
@@ -1446,9 +2270,9 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
 
     // Commands
     help_text.push("\nCommands:\n".truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2,
+        local_state.colours.brackets.0,
+        local_state.colours.brackets.1,
+        local_state.colours.brackets.2,
     ));
     let commands = [
         (
@@ -1470,113 +2294,121 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
 
     for (cmd, alt, desc) in commands.iter() {
         help_text.push(format!("  {}", cmd).truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2,
+            local_state.colours.lone_integer.0,
+            local_state.colours.lone_integer.1,
+            local_state.colours.lone_integer.2,
         ));
-        help_text.push(alt.truecolor(colours.nan.0, colours.nan.1, colours.nan.2));
+        help_text.push(alt.truecolor(
+            local_state.colours.nan.0,
+            local_state.colours.nan.1,
+            local_state.colours.nan.2,
+        ));
         help_text.push(format!(" - {}\n", desc).truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2,
+            local_state.colours.lone_fraction.0,
+            local_state.colours.lone_fraction.1,
+            local_state.colours.lone_fraction.2,
         ));
     }
 
     // Constants
     help_text.push("\nConstants:\n".truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2,
+        local_state.colours.brackets.0,
+        local_state.colours.brackets.1,
+        local_state.colours.brackets.2,
     ));
     for &(name, symbol, description) in CONSTANTS.iter() {
         let token = Token {
             operator: symbol,
             ..Token::new()
         };
-        let value = token2num(&token, base, precision, rand_state, prev_result);
-        let value_string = num2string(&value, base, digits, colours);
+        let value = token2num(&token, &mut local_state);
+        let value_string = num2string(&value, &local_state);
 
         help_text.push(format!("  {:<7}", name).truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2,
+            local_state.colours.lone_integer.0,
+            local_state.colours.lone_integer.1,
+            local_state.colours.lone_integer.2,
         ));
         help_text.push(format!("- {} ", description).truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2,
+            local_state.colours.lone_fraction.0,
+            local_state.colours.lone_fraction.1,
+            local_state.colours.lone_fraction.2,
         ));
         for part in value_string {
             help_text.push(part);
         }
-        help_text.push("\n".truecolor(colours.brackets.0, colours.brackets.1, colours.brackets.2));
+        help_text.push("\n".truecolor(
+            local_state.colours.brackets.0,
+            local_state.colours.brackets.1,
+            local_state.colours.brackets.2,
+        ));
     }
 
     // Operators and Functions
     help_text.push("\nUnary Operators:\n".truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2,
+        local_state.colours.brackets.0,
+        local_state.colours.brackets.1,
+        local_state.colours.brackets.2,
     ));
     for &(name, _, operands, description) in OPERATORS.iter() {
         if operands == 1 && name != "(" && name != ")" {
             help_text.push(format!("  {:<8}", name).truecolor(
-                colours.lone_integer.0,
-                colours.lone_integer.1,
-                colours.lone_integer.2,
+                local_state.colours.lone_integer.0,
+                local_state.colours.lone_integer.1,
+                local_state.colours.lone_integer.2,
             ));
             let capitalized_description = description[0..1].to_uppercase() + &description[1..];
             help_text.push(format!("- {}\n", capitalized_description).truecolor(
-                colours.lone_fraction.0,
-                colours.lone_fraction.1,
-                colours.lone_fraction.2,
+                local_state.colours.lone_fraction.0,
+                local_state.colours.lone_fraction.1,
+                local_state.colours.lone_fraction.2,
             ));
         }
     }
 
     help_text.push("\nBinary Operators:\n".truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2,
+        local_state.colours.brackets.0,
+        local_state.colours.brackets.1,
+        local_state.colours.brackets.2,
     ));
     for &(name, _, operands, description) in OPERATORS.iter() {
         if operands == 2 {
             help_text.push(format!("  {:<7}", name).truecolor(
-                colours.lone_integer.0,
-                colours.lone_integer.1,
-                colours.lone_integer.2,
+                local_state.colours.lone_integer.0,
+                local_state.colours.lone_integer.1,
+                local_state.colours.lone_integer.2,
             ));
             let capitalized_description = description[0..1].to_uppercase() + &description[1..];
             help_text.push(format!("- {}\n", capitalized_description).truecolor(
-                colours.lone_fraction.0,
-                colours.lone_fraction.1,
-                colours.lone_fraction.2,
+                local_state.colours.lone_fraction.0,
+                local_state.colours.lone_fraction.1,
+                local_state.colours.lone_fraction.2,
             ));
         }
     }
 
     // Grouping
     help_text.push("\nGrouping:\n".truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2,
+        local_state.colours.brackets.0,
+        local_state.colours.brackets.1,
+        local_state.colours.brackets.2,
     ));
     help_text.push("  ( )   ".truecolor(
-        colours.lone_integer.0,
-        colours.lone_integer.1,
-        colours.lone_integer.2,
+        local_state.colours.lone_integer.0,
+        local_state.colours.lone_integer.1,
+        local_state.colours.lone_integer.2,
     ));
     help_text.push("- Parentheses for grouping expressions\n".truecolor(
-        colours.lone_fraction.0,
-        colours.lone_fraction.1,
-        colours.lone_fraction.2,
+        local_state.colours.lone_fraction.0,
+        local_state.colours.lone_fraction.1,
+        local_state.colours.lone_fraction.2,
     ));
 
     // Examples
     help_text.push("\nExamples:\n".truecolor(
-        colours.brackets.0,
-        colours.brackets.1,
-        colours.brackets.2,
+        local_state.colours.brackets.0,
+        local_state.colours.brackets.1,
+        local_state.colours.brackets.2,
     ));
     let examples = [
         ("2 + 2", "The meaning of life? Not quite, but it's a start."),
@@ -1606,48 +2438,32 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
         ("&", "See?, 255.")
     ];
 
-    let mut local_base = base;
-    let mut local_precision = precision;
-    let mut local_digits = digits;
-    let mut local_radians = radians;
-    let mut local_prev_result = Complex::with_val(precision, 0);
-
     for (example, desc) in examples.iter() {
         help_text.push(format!("- {}\n", desc).truecolor(
-            colours.comma.0,
-            colours.comma.1,
-            colours.comma.2,
+            local_state.colours.comma.0,
+            local_state.colours.comma.1,
+            local_state.colours.comma.2,
         ));
         help_text.push(format!("  {}\n", example).truecolor(
-            colours.decimal.0,
-            colours.decimal.1,
-            colours.decimal.2,
+            local_state.colours.decimal.0,
+            local_state.colours.decimal.1,
+            local_state.colours.decimal.2,
         ));
         if example.starts_with(':') {
             // Handle commands
-            match parse_command(
-                example.as_bytes(),
-                1,
-                &mut local_base,
-                &mut local_precision,
-                &mut local_digits,
-                &mut local_radians,
-                colours,
-                rand_state,
-                &local_prev_result,
-            ) {
+            match parse_command(example.as_bytes(), 1, &mut local_state) {
                 CommandResult::Success(msg) => {
                     help_text.push(format!("  {}\n", msg).truecolor(
-                        colours.message.0,
-                        colours.message.1,
-                        colours.message.2,
+                        local_state.colours.message.0,
+                        local_state.colours.message.1,
+                        local_state.colours.message.2,
                     ));
                 }
                 CommandResult::Error(msg, _) => {
                     help_text.push(format!("  Error: {}\n", msg).truecolor(
-                        colours.error.0,
-                        colours.error.1,
-                        colours.error.2,
+                        local_state.colours.error.0,
+                        local_state.colours.error.1,
+                        local_state.colours.error.2,
                     ));
                 }
                 CommandResult::Silent => {
@@ -1656,49 +2472,32 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
             }
         } else {
             // Handle expressions
-            match tokenize(
-                example,
-                &mut local_base,
-                &mut local_precision,
-                &mut local_digits,
-                &mut local_radians,
-                colours,
-                rand_state,
-                &local_prev_result,
-            ) {
+            match tokenize(example, &mut local_state) {
                 Ok(tokens) => {
-                    match evaluate_tokens(
-                        &tokens,
-                        local_base,
-                        local_precision,
-                        rand_state,
-                        local_radians,
-                        &local_prev_result,
-                    ) {
+                    match evaluate_tokens(&tokens, &mut local_state) {
                         Ok(result) => {
                             help_text.push("  ".normal());
-                            let result_string =
-                                num2string(&result, local_base, local_digits, colours);
+                            let result_string = num2string(&result, &local_state);
                             for part in result_string {
                                 help_text.push(part);
                             }
                             help_text.push("\n".normal());
-                            local_prev_result = result; // Update local_prev_result for & usage
+                            local_state.prev_result = result; // Update local_prev_result for & usage
                         }
                         Err(err) => {
                             help_text.push(format!("  Error: {}\n", err).truecolor(
-                                colours.error.0,
-                                colours.error.1,
-                                colours.error.2,
+                                local_state.colours.error.0,
+                                local_state.colours.error.1,
+                                local_state.colours.error.2,
                             ));
                         }
                     }
                 }
                 Err((msg, _)) => {
                     help_text.push(format!("  Error: {}\n", msg).truecolor(
-                        colours.error.0,
-                        colours.error.1,
-                        colours.error.2,
+                        local_state.colours.error.0,
+                        local_state.colours.error.1,
+                        local_state.colours.error.2,
                     ));
                 }
             }
@@ -1742,45 +2541,39 @@ fn gaussian_complex_random(precision: u32, rand_state: &mut rug::rand::RandState
 ///
 /// # Returns
 /// * `Complex` - The complex number representation of the token
-fn token2num(
-    token: &Token,
-    base: u8,
-    precision: u32,
-    rand_state: &mut rug::rand::RandState,
-    prev_result: &Complex,
-) -> Complex {
+fn token2num(token: &Token, state: &mut BasecalcState) -> Complex {
     match token.operator {
-        'E' => Complex::with_val(precision, Float::with_val(precision, 1).exp()),
-        'G' => Complex::with_val(precision, rug::float::Constant::Euler),
-        'p' => Complex::with_val(precision, rug::float::Constant::Pi),
-        'r' => generate_random(precision, rand_state),
-        'g' => gaussian_complex_random(precision, rand_state),
-        '&' => prev_result.clone(),
+        'E' => Complex::with_val(state.precision, Float::with_val(state.precision, 1).exp()),
+        'G' => Complex::with_val(state.precision, rug::float::Constant::Euler),
+        'p' => Complex::with_val(state.precision, rug::float::Constant::Pi),
+        'r' => generate_random(state.precision, &mut state.rand_state),
+        'g' => gaussian_complex_random(state.precision, &mut state.rand_state),
+        '&' => state.prev_result.clone(),
         _ => {
-            let mut real_int = Float::with_val(precision, 0);
+            let mut real_int = Float::with_val(state.precision, 0);
             for &digit in &token.real_integer {
-                real_int *= base;
+                real_int *= state.base;
                 real_int += digit;
             }
-            let mut real_frac = Float::with_val(precision, 0);
+            let mut real_frac = Float::with_val(state.precision, 0);
             for &digit in token.real_fraction.iter().rev() {
                 real_frac += digit as f64;
-                real_frac /= base as f64;
+                real_frac /= state.base as f64;
             }
 
-            let mut imag_int = Float::with_val(precision, 0);
+            let mut imag_int = Float::with_val(state.precision, 0);
             for &digit in &token.imaginary_integer {
-                imag_int *= base;
+                imag_int *= state.base;
                 imag_int += digit;
             }
-            let mut imag_frac = Float::with_val(precision, 0);
+            let mut imag_frac = Float::with_val(state.precision, 0);
             for &digit in token.imaginary_fraction.iter().rev() {
                 imag_frac += digit as f64;
-                imag_frac /= base as f64;
+                imag_frac /= state.base as f64;
             }
 
-            let mut real = Float::with_val(precision, &real_int + &real_frac);
-            let mut imaginary = Float::with_val(precision, &imag_int + &imag_frac);
+            let mut real = Float::with_val(state.precision, &real_int + &real_frac);
+            let mut imaginary = Float::with_val(state.precision, &imag_int + &imag_frac);
 
             if token.sign.0 {
                 real = -real;
@@ -1789,7 +2582,7 @@ fn token2num(
                 imaginary = -imaginary;
             }
 
-            Complex::with_val(precision, (real, imaginary))
+            Complex::with_val(state.precision, (real, imaginary))
         }
     }
 }
@@ -1803,7 +2596,7 @@ fn token2num(
 ///
 /// # Returns
 /// * `Vec<ColoredString>` - A vector of coloured strings representing the number
-fn num2string(num: &Complex, base: u8, digits: usize, colours: &RGBValues) -> Vec<ColoredString> {
+fn num2string(num: &Complex, state: &BasecalcState) -> Vec<ColoredString> {
     let mut result = Vec::new();
 
     if num.real().is_nan()
@@ -1811,19 +2604,35 @@ fn num2string(num: &Complex, base: u8, digits: usize, colours: &RGBValues) -> Ve
         || num.real().is_infinite()
         || num.imag().is_infinite()
     {
-        result.push("NaN".truecolor(colours.nan.0, colours.nan.1, colours.nan.2));
+        result.push("NaN".truecolor(
+            state.colours.nan.0,
+            state.colours.nan.1,
+            state.colours.nan.2,
+        ));
         return result;
     }
 
     if num.imag().is_zero() {
         result.push(" ".normal());
-        result.extend(format_part(num.real(), base, digits, colours, true, true));
+        result.extend(format_part(num.real(), state, true, true));
     } else {
-        result.push("[".truecolor(colours.brackets.0, colours.brackets.1, colours.brackets.2));
-        result.extend(format_part(num.real(), base, digits, colours, true, false));
-        result.push(" ,".truecolor(colours.comma.0, colours.comma.1, colours.comma.2));
-        result.extend(format_part(num.imag(), base, digits, colours, false, false));
-        result.push(" ]".truecolor(colours.brackets.0, colours.brackets.1, colours.brackets.2));
+        result.push("[".truecolor(
+            state.colours.brackets.0,
+            state.colours.brackets.1,
+            state.colours.brackets.2,
+        ));
+        result.extend(format_part(num.real(), state, true, false));
+        result.push(" ,".truecolor(
+            state.colours.comma.0,
+            state.colours.comma.1,
+            state.colours.comma.2,
+        ));
+        result.extend(format_part(num.imag(), state, false, false));
+        result.push(" ]".truecolor(
+            state.colours.brackets.0,
+            state.colours.brackets.1,
+            state.colours.brackets.2,
+        ));
     }
 
     result
@@ -1842,9 +2651,7 @@ fn num2string(num: &Complex, base: u8, digits: usize, colours: &RGBValues) -> Ve
 /// * `Vec<ColoredString>` - A vector of coloured strings representing the formatted number
 fn format_part(
     num: &rug::Float,
-    base: u8,
-    num_digits: usize,
-    colours: &RGBValues,
+    state: &BasecalcState,
     is_real: bool,
     is_lone: bool,
 ) -> Vec<ColoredString> {
@@ -1853,15 +2660,23 @@ fn format_part(
     if num.is_zero() {
         result.push(" ".normal());
         result.push("0".truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2,
+            state.colours.lone_integer.0,
+            state.colours.lone_integer.1,
+            state.colours.lone_integer.2,
         ));
-        result.push(".".truecolor(colours.decimal.0, colours.decimal.1, colours.decimal.2));
+        result.push(".".truecolor(
+            state.colours.decimal.0,
+            state.colours.decimal.1,
+            state.colours.decimal.2,
+        ));
         return result;
     }
     if num.is_nan() || num.is_infinite() {
-        result.push("NaN".truecolor(colours.nan.0, colours.nan.1, colours.nan.2));
+        result.push("NaN".truecolor(
+            state.colours.nan.0,
+            state.colours.nan.1,
+            state.colours.nan.2,
+        ));
         return result;
     }
 
@@ -1869,31 +2684,36 @@ fn format_part(
     if is_positive {
         result.push(" ".normal());
     } else {
-        result.push("-".truecolor(colours.sign.0, colours.sign.1, colours.sign.2));
+        result.push("-".truecolor(
+            state.colours.sign.0,
+            state.colours.sign.1,
+            state.colours.sign.2,
+        ));
     }
 
     let mut num_abs = num.clone().abs();
-    let mut decimal_place = (num_abs.clone().log2() / (Float::with_val(num.prec(), base)).log2())
-        .floor()
-        .to_f64() as isize;
-    num_abs = num_abs / (Float::with_val(num.prec(), base)).pow(decimal_place);
-    num_abs += (Float::with_val(num.prec(), base)).pow(-(num_digits as isize - 1)) / 2;
-    if num_abs > base {
+    let mut decimal_place = (num_abs.clone().log2()
+        / (Float::with_val(num.prec(), state.base)).log2())
+    .floor()
+    .to_f64() as isize;
+    num_abs = num_abs / (Float::with_val(num.prec(), state.base)).pow(decimal_place);
+    num_abs += (Float::with_val(num.prec(), state.base)).pow(-(state.digits as isize - 1)) / 2;
+    if num_abs > state.base {
         num_abs = num.clone().abs();
         decimal_place += 1;
-        num_abs = num_abs / (Float::with_val(num.prec(), base)).pow(decimal_place);
-        num_abs += (Float::with_val(num.prec(), base)).pow(-(num_digits as isize - 1)) / 2;
+        num_abs = num_abs / (Float::with_val(num.prec(), state.base)).pow(decimal_place);
+        num_abs += (Float::with_val(num.prec(), state.base)).pow(-(state.digits as isize - 1)) / 2;
     }
 
     let mut integer_part = String::new();
     let mut decimal = false;
     let mut place = 0;
     let mut offset = place as isize - decimal_place;
-    while offset <= 0 && place < num_digits {
+    while offset <= 0 && place < state.digits {
         place += 1;
         let digit: u8 = num_abs.clone().floor().cast();
         num_abs = num_abs - digit;
-        num_abs *= base;
+        num_abs *= state.base;
         let digit_char = if digit < 10 {
             (digit + b'0') as char
         } else {
@@ -1910,11 +2730,11 @@ fn format_part(
         decimal = true;
     }
     let mut fractional_part = String::new();
-    while offset > 0 && place < num_digits {
+    while offset > 0 && place < state.digits {
         place += 1;
         let digit: u8 = num_abs.clone().floor().cast();
         num_abs = num_abs - digit;
-        num_abs *= base;
+        num_abs *= state.base;
         let digit_char = if digit < 10 {
             (digit + b'0') as char
         } else {
@@ -1928,29 +2748,40 @@ fn format_part(
         }
     }
     let (int_colour, frac_colour) = if is_lone {
-        (colours.lone_integer, colours.lone_fraction)
+        (state.colours.lone_integer, state.colours.lone_fraction)
     } else if is_real {
-        (colours.real_integer, colours.real_fraction)
+        (state.colours.real_integer, state.colours.real_fraction)
     } else {
-        (colours.imaginary_integer, colours.imaginary_fraction)
+        (
+            state.colours.imaginary_integer,
+            state.colours.imaginary_fraction,
+        )
     };
     let prec = num_abs.prec();
-    let tilde =
-        (num_abs * Float::with_val(prec, 2) - Float::with_val(prec, base)).abs() > 2f64.pow(-16);
+    let tilde = (num_abs * Float::with_val(prec, 2) - Float::with_val(prec, state.base)).abs()
+        > 2f64.pow(-16);
     if decimal {
         if integer_part.is_empty() {
             result.push("0".truecolor(int_colour.0, int_colour.1, int_colour.2));
         } else {
             result.push(integer_part.truecolor(int_colour.0, int_colour.1, int_colour.2));
         }
-        result.push(".".truecolor(colours.decimal.0, colours.decimal.1, colours.decimal.2));
+        result.push(".".truecolor(
+            state.colours.decimal.0,
+            state.colours.decimal.1,
+            state.colours.decimal.2,
+        ));
         result.push(trim_zeros(fractional_part).truecolor(
             frac_colour.0,
             frac_colour.1,
             frac_colour.2,
         ));
         if tilde {
-            result.push("~".truecolor(colours.tilde.0, colours.tilde.1, colours.tilde.2));
+            result.push("~".truecolor(
+                state.colours.tilde.0,
+                state.colours.tilde.1,
+                state.colours.tilde.2,
+            ));
         } else {
             result.push(" ".normal());
         }
@@ -1974,26 +2805,34 @@ fn format_part(
             }
             result.push(number.truecolor(frac_colour.0, frac_colour.1, frac_colour.2));
             if tilde {
-                result.push("~".truecolor(colours.tilde.0, colours.tilde.1, colours.tilde.2));
+                result.push("~".truecolor(
+                    state.colours.tilde.0,
+                    state.colours.tilde.1,
+                    state.colours.tilde.2,
+                ));
             } else {
                 result.push(" ".normal());
             }
-            result.push(" :".truecolor(colours.colon.0, colours.colon.1, colours.colon.2));
+            result.push(" :".truecolor(
+                state.colours.colon.0,
+                state.colours.colon.1,
+                state.colours.colon.2,
+            ));
             if decimal_place < 0 {
                 let mut exponent = "-".to_owned();
-                exponent.push_str(&format_int((-decimal_place) as usize, base as usize));
+                exponent.push_str(&format_int((-decimal_place) as usize, state.base as usize));
                 result.push(exponent.truecolor(
-                    colours.exponent.0,
-                    colours.exponent.1,
-                    colours.exponent.2,
+                    state.colours.exponent.0,
+                    state.colours.exponent.1,
+                    state.colours.exponent.2,
                 ));
             } else {
                 let mut exponent = " ".to_owned();
-                exponent.push_str(&format_int(decimal_place as usize, base as usize));
+                exponent.push_str(&format_int(decimal_place as usize, state.base as usize));
                 result.push(exponent.truecolor(
-                    colours.exponent.0,
-                    colours.exponent.1,
-                    colours.exponent.2,
+                    state.colours.exponent.0,
+                    state.colours.exponent.1,
+                    state.colours.exponent.2,
                 ));
             }
         } else {
@@ -2015,26 +2854,34 @@ fn format_part(
             }
             result.push(number.truecolor(int_colour.0, int_colour.1, int_colour.2));
             if tilde {
-                result.push("~".truecolor(colours.tilde.0, colours.tilde.1, colours.tilde.2));
+                result.push("~".truecolor(
+                    state.colours.tilde.0,
+                    state.colours.tilde.1,
+                    state.colours.tilde.2,
+                ));
             } else {
                 result.push(" ".normal());
             }
-            result.push(" :".truecolor(colours.colon.0, colours.colon.1, colours.colon.2));
+            result.push(" :".truecolor(
+                state.colours.colon.0,
+                state.colours.colon.1,
+                state.colours.colon.2,
+            ));
             if decimal_place < 0 {
                 let mut exponent = "-".to_owned();
-                exponent.push_str(&format_int((-decimal_place) as usize, base as usize));
+                exponent.push_str(&format_int((-decimal_place) as usize, state.base as usize));
                 result.push(exponent.truecolor(
-                    colours.exponent.0,
-                    colours.exponent.1,
-                    colours.exponent.2,
+                    state.colours.exponent.0,
+                    state.colours.exponent.1,
+                    state.colours.exponent.2,
                 ));
             } else {
                 let mut exponent = " ".to_owned();
-                exponent.push_str(&format_int(decimal_place as usize, base as usize));
+                exponent.push_str(&format_int(decimal_place as usize, state.base as usize));
                 result.push(exponent.truecolor(
-                    colours.exponent.0,
-                    colours.exponent.1,
-                    colours.exponent.2,
+                    state.colours.exponent.0,
+                    state.colours.exponent.1,
+                    state.colours.exponent.2,
                 ));
             }
         }
@@ -2127,13 +2974,8 @@ fn debug_println(msg: &str) {
         println!("{}", msg);
     }
 }
-fn run_tests(colours: &RGBValues) -> (usize, usize) {
-    let mut base = 10;
-    let mut digits = 12;
-    let mut precision = (digits as f64 * (base as f64).log2()).ceil() as u32 + 32;
-    let mut radians = true;
-    let mut rand_state = rand::RandState::new();
-
+fn run_tests() -> (usize, usize) {
+    let mut state = BasecalcState::new();
     let tests = vec![
         (":baSE C", "Base set to Dozenal (C)."),
         (":DIGits    \t__\t\t2  0", "Precision set to 20 digits."),
@@ -2253,39 +3095,24 @@ fn run_tests(colours: &RGBValues) -> (usize, usize) {
     ];
     let mut passed = 0;
     let total = tests.len();
-    let mut prev_value = Complex::with_val(precision, 0);
     for (input, expected) in tests {
         println!("> {}", input);
 
-        let (coloured_result, result) = match tokenize(
-            input,
-            &mut base,
-            &mut precision,
-            &mut digits,
-            &mut radians,
-            colours,
-            &mut rand_state,
-            &prev_value,
-        ) {
-            Ok(tokens) => {
-                match evaluate_tokens(
-                    &tokens,
-                    base,
-                    precision,
-                    &mut rand_state,
-                    radians,
-                    &prev_value,
-                ) {
-                    Ok(eval_value) => {
-                        let coloured_vec = num2string(&eval_value, base, digits, &colours);
-                        prev_value = eval_value;
-                        (coloured_vec.clone(), coloured_vec_to_string(&coloured_vec))
-                    }
-                    Err(err) => (vec![err.red()], err),
+        let (coloured_result, result) = match tokenize(input, &mut state) {
+            Ok(tokens) => match evaluate_tokens(&tokens, &mut state) {
+                Ok(eval_value) => {
+                    let coloured_vec = num2string(&eval_value, &state);
+                    state.prev_result = eval_value;
+                    (coloured_vec.clone(), coloured_vec_to_string(&coloured_vec))
                 }
-            }
+                Err(err) => (vec![err.red()], err),
+            },
             Err((msg, _)) => (
-                vec![msg.truecolor(colours.message.0, colours.message.1, colours.message.2)],
+                vec![msg.truecolor(
+                    state.colours.message.0,
+                    state.colours.message.1,
+                    state.colours.message.2,
+                )],
                 msg,
             ),
         };
