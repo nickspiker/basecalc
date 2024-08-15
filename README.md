@@ -120,7 +120,7 @@ Base set to Decimal (A).
 
 1. Clone this repository as fast as light:
    ```
-   git clone https://github.com/yourusername/basecalc.git
+   git clone https://github.com/nickspiker/basecalc.git
    ```
 2. Navigate to the basecalc directory:
    ```
