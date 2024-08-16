@@ -119,17 +119,7 @@ Base set to Decimal (A).
   10
 ```
 
-## Pre-compiled Binaries
-
-For your convenience, pre-compiled binaries are available for the following platforms:
-
-- Windows (x86_64)
-- macOS (x86_64 and ARM64)
-- Linux (x86_64 and ARM64)
-
-You can download binaries from the [Releases](https://github.com/nickspiker/basecalc/releases) page.
-
-## 🚀 Building from Source
+## 🚀 Building and Running
 
 1. Clone this repository as fast as light:
    ```
