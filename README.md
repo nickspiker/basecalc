@@ -119,20 +119,38 @@ Base set to Decimal (A).
   10
 ```
 
-## 🚀 Building and Running
+Thank you for providing the content to rework. I'll revise the "Building and Running" section to make it more accessible for those who aren't familiar with Rust. Here's the updated version:
 
-1. Clone this repository as fast as light:
+#### 🚀 Building and Running
+
+1. **Install Rust**: 
+   If you haven't already, you'll need to install Rust on your system. Visit the official Rust website (https://www.rust-lang.org/) and follow the installation instructions for your operating system.
+
+2. **Clone the repository**:
+   Open your terminal or command prompt and run:
    ```
    git clone https://github.com/nickspiker/basecalc.git
    ```
-2. Navigate to the basecalc directory:
+   This downloads the basecalc source code to your machin.
+
+3. **Navigate to the basecalc directory**:
+   Change to the newly created basecalc directory:
    ```
    cd basecalc
    ```
-3. Build and run basecalc and start your journey through the mathematical multiverse!
+
+4. **Build and run basecalc**:
+   Now, use Rust's package manager, Cargo, to build and run the application:
    ```
    cargo run --release
    ```
+   This command compiles the code and starts basecalc. The `--release` flag ensures optimal performance.
+
+5. **Start calculating**:
+   Once basecalc is running, you can start entering calculations and commands!
+
+**For non-Rust users**:
+If you're not comfortable with building from source, keep an eye on the project's GitHub page. In the future, pre-compiled binaries will be available for different operating systems, making it easier to run basecalc without needing to install Rust or compile yourself.
 
 ## 🌌 Contributing
 
