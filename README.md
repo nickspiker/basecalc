@@ -70,9 +70,66 @@ Spaces, tabs, and underscores are ignored, so feel free to make your numbers as 
 
 ## 🧠 Operators and Functions
 
-(List of operators and functions remains the same as in the original README)
+### Basic Operators
+- `+`, `-`, `*`, `/`: The fantastic four of arithmetic.
+- `^`: Exponentiation, for when your numbers need to reach for the stars.
+- `%`: Modulus, because even the universe has leftovers.
 
-## 🚀 Installation
+### Unary Operators
+- `#abs`: Absolute value, for numbers with identity crises.
+- `#sqrt`: Square root, the mathematical equivalent of splitting an atom.
+- `#ln`, `#log`: Natural and current base logarithms, for when your numbers need to get down to earth.
+- `#sin`, `#cos`, `#tan`: Trigonometric functions, essential for surfing thru spacetime.
+- `#asin`, `#acos`, `#atan`: Inverse trig, for when you need to undo your sinful calculations.
+- `#ceil`, `#floor`, `#round`: For when you need to flatten the curve of your results.
+- `#re`, `#im`: Extract real and imaginary parts, like separating Siamese twins.
+
+### Constants
+- `@pi`: π, the circle's best friend.
+- `@e`: e, the natural choice for exponential explorers.
+- `@gamma`: The Euler-Mascheroni constant, for those who like their math extra crispy.
+- `@rand`: Random number generator, for when you need to simulate uncertainty.
+- `@grand`: Gaussian random number, because sometimes your randomness needs a bell curve.
+
+## 🌟 Examples
+
+```
+> 2 + 3 * 4
+  14
+
+> #sin(@pi/4)
+  0.707106781187
+
+> [3, 4] * [1, -1]
+  [7, 1]
+
+> #sqrt-1
+  [0, 1]
+
+> :base C
+Base set to Dozenal (C).
+
+> 5^-25*[-3.24,-4.1b]
+  [-5.58 BA6 424 28A 6A9 238 829 27A~ :-17, -7.17 49A 618 591 429 757 6B6 512~ :-17]
+
+> :base A
+Base set to Decimal (A).
+
+> 9+1
+  10
+```
+
+## Pre-compiled Binaries
+
+For your convenience, pre-compiled binaries are available for the following platforms:
+
+- Windows (x86_64)
+- macOS (x86_64 and ARM64)
+- Linux (x86_64 and ARM64)
+
+You can download binaries from the [Releases](https://github.com/nickspiker/basecalc/releases) page.
+
+## 🚀 Building from Source
 
 1. Clone this repository as fast as light:
    ```
