@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+        override: true
+    - uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release --target ${{ matrix.target }}
+    - name: Package
+      shell: bash
+      run: |
+        ARCHIVE_NAME="basecalc-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+        if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+          EXTENSION=".exe"
+        else
+          EXTENSION=""
+        fi
+        tar -czf "$ARCHIVE_NAME" -C "target/${{ matrix.target }}/release" "basecalc$EXTENSION"
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: "basecalc-*.tar.gz"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-linux-arm:
+    name: Release Linux ARM
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: aarch64-unknown-linux-gnu
+        override: true
+    - name: Install cross
+      run: cargo install cross
+    - name: Build
+      run: cross build --release --target aarch64-unknown-linux-gnu
+    - name: Package
+      run: |
+        ARCHIVE_NAME="basecalc-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz"
+        tar -czf "$ARCHIVE_NAME" -C "target/aarch64-unknown-linux-gnu/release" "basecalc"
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: "basecalc-*.tar.gz"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
