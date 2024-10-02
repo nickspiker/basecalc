@@ -52,6 +52,7 @@ fn main() -> rustyline::Result<()> {
     };
 
     print_stylized_intro(&state.colours);
+    println!();
     print_settings(&state);
 
     loop {
@@ -133,25 +134,45 @@ fn main() -> rustyline::Result<()> {
 
     Ok(())
 }
+
 fn terminal_line_entry(state: &mut BasecalcState) -> io::Result<Option<String>> {
     let mut stdout = io::stdout().into_raw_mode()?;
     let stdin = io::stdin();
     let mut chars = stdin.keys();
     let mut user_input = String::new();
+    let mut cursor_position = 0;
 
     loop {
-        write!(stdout, "\r\x1B[2K> {}", state.current_entry)?;
+        // Ensure cursor_position is within bounds
+        cursor_position = cursor_position.min(state.current_entry.len());
+
+        write!(
+            stdout,
+            "\r\x1B[2K> {}{}",
+            &state.current_entry[..cursor_position],
+            &state.current_entry[cursor_position..]
+        )?;
+        write!(stdout, "\r\x1B[{}C", cursor_position + 2)?;  // +2 for "> "
         stdout.flush()?;
 
         if let Some(Ok(key)) = chars.next() {
             match key {
+                Key::Left => {
+                    if cursor_position > 0 {
+                        cursor_position -= 1;
+                    }
+                }
+                Key::Right => {
+                    if cursor_position < state.current_entry.len() {
+                        cursor_position += 1;
+                    }
+                }
                 Key::Up => {
                     if state.history_index < state.history.len() {
                         state.history_index += 1;
                         let index = state.history.len() - state.history_index;
-                        if state.history[index].starts_with(&user_input) {
-                            state.current_entry = state.history[index].clone();
-                        }
+                        state.current_entry = state.history[index].clone();
+                        cursor_position = state.current_entry.len();
                     }
                 }
                 Key::Down => {
@@ -161,10 +182,9 @@ fn terminal_line_entry(state: &mut BasecalcState) -> io::Result<Option<String>> 
                             state.current_entry = user_input.clone();
                         } else {
                             let index = state.history.len() - state.history_index;
-                            if state.history[index].starts_with(&user_input) {
-                                state.current_entry = state.history[index].clone();
-                            }
+                            state.current_entry = state.history[index].clone();
                         }
+                        cursor_position = state.current_entry.len();
                     }
                 }
                 Key::Char('\n') => {
@@ -176,15 +196,23 @@ fn terminal_line_entry(state: &mut BasecalcState) -> io::Result<Option<String>> 
                     state.current_entry.clear();
                     user_input.clear();
                     state.history_index = 0;
+                    writeln!(stdout)?;
                     return Ok(Some(entry));
                 }
                 Key::Char(c) => {
-                    state.current_entry.push(c);
-                    user_input.push(c);
+                    state.current_entry.insert(cursor_position, c);
+                    cursor_position += 1;
                 }
                 Key::Backspace => {
-                    state.current_entry.pop();
-                    user_input.pop();
+                    if cursor_position > 0 {
+                        state.current_entry.remove(cursor_position - 1);
+                        cursor_position -= 1;
+                    }
+                }
+                Key::Delete => {
+                    if cursor_position < state.current_entry.len() {
+                        state.current_entry.remove(cursor_position);
+                    }
                 }
                 Key::Ctrl('c') => {
                     writeln!(stdout, "\nInterrupted")?;
@@ -195,6 +223,7 @@ fn terminal_line_entry(state: &mut BasecalcState) -> io::Result<Option<String>> 
         }
     }
 }
+
 fn get_state_file_path() -> PathBuf {
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push("basecalc");
@@ -1052,13 +1081,20 @@ fn is_keyboard_printable(byte: u8) -> bool {
     }
 }
 fn print_settings(state: &BasecalcState) {
-    let colours = &state.colours;
+    print!(
+        "{}",
+        "Currently ".truecolor(
+            state.colours.real_integer.0,
+            state.colours.real_integer.1,
+            state.colours.real_integer.2
+        )
+    );
     print!(
         "{}",
         "Base: ".truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2
+            state.colours.lone_integer.0,
+            state.colours.lone_integer.1,
+            state.colours.lone_integer.2
         )
     );
     let base_char = if state.base < 10 {
@@ -1069,56 +1105,56 @@ fn print_settings(state: &BasecalcState) {
     print!(
         "{}",
         base_char.to_string().truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2
+            state.colours.lone_fraction.0,
+            state.colours.lone_fraction.1,
+            state.colours.lone_fraction.2
         )
     );
     print!(
         " ({})",
         get_base_name(state.base).unwrap().truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2
+            state.colours.lone_fraction.0,
+            state.colours.lone_fraction.1,
+            state.colours.lone_fraction.2
         )
     );
     print!(
         "{}",
         ", Digits: ".truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2
+            state.colours.lone_integer.0,
+            state.colours.lone_integer.1,
+            state.colours.lone_integer.2
         )
     );
     print!(
         "{}",
         format_int(state.digits, state.base as usize).truecolor(
-            colours.lone_fraction.0,
-            colours.lone_fraction.1,
-            colours.lone_fraction.2
+            state.colours.lone_fraction.0,
+            state.colours.lone_fraction.1,
+            state.colours.lone_fraction.2
         )
     );
     print!(
         "{}",
         ", Trig units: ".truecolor(
-            colours.lone_integer.0,
-            colours.lone_integer.1,
-            colours.lone_integer.2
+            state.colours.lone_integer.0,
+            state.colours.lone_integer.1,
+            state.colours.lone_integer.2
         )
     );
     println!(
         "{}",
         if state.radians {
             "radians".truecolor(
-                colours.lone_fraction.0,
-                colours.lone_fraction.1,
-                colours.lone_fraction.2,
+                state.colours.lone_fraction.0,
+                state.colours.lone_fraction.1,
+                state.colours.lone_fraction.2,
             )
         } else {
             "degrees".truecolor(
-                colours.lone_fraction.0,
-                colours.lone_fraction.1,
-                colours.lone_fraction.2,
+                state.colours.lone_fraction.0,
+                state.colours.lone_fraction.1,
+                state.colours.lone_fraction.2,
             )
         }
     );
@@ -1188,7 +1224,7 @@ fn print_stylized_intro(colours: &RGBValues) {
             .bold()
     );
 }
-static OPERATORS: [(&str, char, u8, &str); 27] = [
+static OPERATORS: [(&str, char, u8, &str); 28] = [
     // Basic arithmetic
     ("+", '+', 2, "addition"),
     ("-", '-', 2, "subtraction"),
@@ -1223,6 +1259,7 @@ static OPERATORS: [(&str, char, u8, &str); 27] = [
     ("#angle", 'A', 1, "complex angle"),
     // Miscellaneous
     ("#sign", 'g', 1, "sign"),
+    ("#erf", 'x', 1, "error function"),
     // Commented out for potential future use
     // ("#gamma", '!', 1, "gamma function"),
     // ("#max", 'M', 2, "maximum"),
@@ -1646,7 +1683,7 @@ fn apply_operator(
     match op {
         '+' | '-' | '*' | '/' | '^' | '%' => apply_binary_operator(output_queue, op)?,
         'n' | 'a' | 'O' | 'o' | 'S' | 'T' | 'c' | 'f' | 'F' | 'i' | 'I' | 'l' | 'L' | 'e' | 'r'
-        | 'g' | 's' | 'q' | 't' | 'A' => {
+        | 'g' | 's' | 'q' | 't' | 'A' | 'x' => {
             if let Some(value) = output_queue.pop() {
                 let result = apply_unary_operator(op, value, state)?;
                 output_queue.push(result);
@@ -1749,6 +1786,56 @@ fn apply_unary_operator(
                 rad_result * 180.0 / Float::with_val(state.precision, rug::float::Constant::Pi)
             }
         }
+
+        'x' => {
+            // Gaussian error function (erf) approximation
+            if !value.imag().is_zero() {
+                println!("Warning: complex gaussian error function is likely incorrect!");
+            }
+            let z = value;
+            let one = Complex::with_val(state.precision, 1);
+            let two = Complex::with_val(state.precision, 2);
+            let pi = Float::with_val(state.precision, std::f64::consts::PI);
+
+            // Series expansion for small |z|
+            let erf_series = |z: &Complex| -> Complex {
+                let mut sum = z.clone();
+                let mut term = z.clone();
+                let mut n = Float::with_val(state.precision, 0);
+                let threshold = Float::with_val(state.precision, 2).pow(-(state.precision as isize));
+
+                while term.clone().abs().real() > &threshold {
+                    n += 1;
+                    term = -term.clone() * z * z
+                        / Complex::with_val(state.precision, n.clone() * 2 + 1);
+                    sum += &term;
+                }
+
+                sum * two.clone() / Complex::with_val(state.precision, pi.clone().sqrt())
+            };
+
+            // Approximation for larger |z|
+            let erf_approx = |z: &Complex| -> Complex {
+                let t = Complex::with_val(state.precision, 1)
+                    / (Complex::with_val(state.precision, 1)
+                        + Complex::with_val(state.precision, 0.3275911) * z.clone().abs());
+                let poly = Complex::with_val(state.precision, 0.254829592) * t.clone()
+                    - Complex::with_val(state.precision, 0.284496736) * t.clone().pow(2)
+                    + Complex::with_val(state.precision, 1.421413741) * t.clone().pow(3)
+                    - Complex::with_val(state.precision, 1.453152027) * t.clone().pow(4)
+                    + Complex::with_val(state.precision, 1.061405429) * t.pow(5);
+                one.clone() - poly * (-z.clone() * z).exp()
+            };
+
+            if z.clone().abs().real() < &Float::with_val(state.precision, 0.5) {
+                erf_series(&z)
+            } else if z.real().clone() >= Float::with_val(state.precision, 0) {
+                erf_approx(&z)
+            } else {
+                -erf_approx(&(-z.clone()))
+            }
+        }
+
         _ => return Err(format!("Unknown unary operator: {}", op)),
     };
     debug_println(&format!("Result of unary operation: {}", result));
