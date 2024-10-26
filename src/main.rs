@@ -13,6 +13,35 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// AI notes:
+// 1. Key Pain Points Observed:
+// - Constantly needing to copy/paste long number strings
+// - Easy to make transcription errors
+// - Can't easily verify steps against expected values
+// - No way to track transformations systematically
+// 
+// 2. Features Needed:
+// - Variables/stack for intermediate values
+// - Way to mark verification points/assertions
+// - Record/replay sequences of operations
+// - Step-by-step comparison with reference implementations
+// - Debug mode to show precision loss at each step, encoding patterns and set precision/base
+// 
+// 3. Specific Additions:
+// - Store/name intermediate calculations, present formatted command and output to user
+// - Compare results within epsilon
+// - Track precision loss through operation chains
+// - Save/load common transformation sequences
+// - Built-in coordinate system transforms, int/float conversions, etc.
+// - All common operators should be defined and integrated
+// 
+// 4. Syntax Suggestions:
+// - Store value: -> var_name
+// - Assert within epsilon: =~ expected_value
+// - Show precision loss: .precision
+// - Save sequence: .save transform_name
+
 use az::Cast;
 use colored::*;
 use dirs;
@@ -152,7 +181,7 @@ fn terminal_line_entry(state: &mut BasecalcState) -> io::Result<Option<String>> 
             &state.current_entry[..cursor_position],
             &state.current_entry[cursor_position..]
         )?;
-        write!(stdout, "\r\x1B[{}C", cursor_position + 2)?;  // +2 for "> "
+        write!(stdout, "\r\x1B[{}C", cursor_position + 2)?; // +2 for "> "
         stdout.flush()?;
 
         if let Some(Ok(key)) = chars.next() {
@@ -1224,7 +1253,7 @@ fn print_stylized_intro(colours: &RGBValues) {
             .bold()
     );
 }
-static OPERATORS: [(&str, char, u8, &str); 28] = [
+static OPERATORS: [(&str, char, u8, &str); 29] = [
     // Basic arithmetic
     ("+", '+', 2, "addition"),
     ("-", '-', 2, "subtraction"),
@@ -1232,6 +1261,7 @@ static OPERATORS: [(&str, char, u8, &str); 28] = [
     ("/", '/', 2, "division"),
     ("^", '^', 2, "exponentiation"),
     ("%", '%', 2, "modulus"),
+    ("$", '$', 2, "log and base logarithm"),
     // Parentheses
     ("(", '(', 1, "left parenthesis"),
     (")", ')', 1, "right parenthesis"),
@@ -1265,8 +1295,9 @@ static OPERATORS: [(&str, char, u8, &str); 28] = [
     // ("#max", 'M', 2, "maximum"),
     // ("#min", 'm', 2, "minimum"),
 ];
-static CONSTANTS: [(&str, char, &str); 6] = [
+static CONSTANTS: [(&str, char, &str); 7] = [
     ("@pi", 'p', "Pi"),
+    ("@phi", 'P', "Golden ratio"),
     ("@e", 'E', "Euler's number"),
     ("@gamma", 'G', "Euler-Mascheroni constant"),
     ("@rand", 'r', "Random number between 0 and 1"),
@@ -1681,7 +1712,7 @@ fn apply_operator(
 ) -> Result<(), String> {
     debug_println(&format!("Applying operator: {}", op));
     match op {
-        '+' | '-' | '*' | '/' | '^' | '%' => apply_binary_operator(output_queue, op)?,
+        '+' | '-' | '*' | '/' | '^' | '%' | '$' => apply_binary_operator(output_queue, op)?,
         'n' | 'a' | 'O' | 'o' | 'S' | 'T' | 'c' | 'f' | 'F' | 'i' | 'I' | 'l' | 'L' | 'e' | 'r'
         | 'g' | 's' | 'q' | 't' | 'A' | 'x' => {
             if let Some(value) = output_queue.pop() {
@@ -1699,7 +1730,7 @@ fn get_precedence(op: char) -> Precedence {
     match op {
         '+' | '-' => Precedence::Addition,
         '*' | '/' | '%' => Precedence::Multiplication,
-        '^' => Precedence::Exponentiation,
+        '^' | '$' => Precedence::Exponentiation,
         'n' | 'a' | 'O' | 'o' | 'S' | 'T' | 'c' | 'f' | 'F' | 'i' | 'I' | 'l' | 'L' | 'e' | 'r'
         | 'g' | 's' | 'q' | 't' | 'A' => Precedence::Unary,
         '(' | ')' => Precedence::Parenthesis,
@@ -1802,7 +1833,8 @@ fn apply_unary_operator(
                 let mut sum = z.clone();
                 let mut term = z.clone();
                 let mut n = Float::with_val(state.precision, 0);
-                let threshold = Float::with_val(state.precision, 2).pow(-(state.precision as isize));
+                let threshold =
+                    Float::with_val(state.precision, 2).pow(-(state.precision as isize));
 
                 while term.clone().abs().real() > &threshold {
                     n += 1;
@@ -1861,6 +1893,7 @@ fn apply_binary_operator(output_queue: &mut Vec<Complex>, op: char) -> Result<()
         let result = match op {
             '%' => a.modulus(b),
             '^' => a.pow(&b),
+            '$' => a.ln() / b.ln(),
             '*' => a * b,
             '+' => a + b,
             '-' => a - b,
@@ -2316,6 +2349,22 @@ fn parse_command(input: &[u8], mut index: usize, state: &mut BasecalcState) -> C
             state.radians = true;
             CommandResult::Success("Angle units set to radians.".to_string())
         }
+        s if s.len() >= 3 && s[..3].eq_ignore_ascii_case(b"dms") => {
+            // Check if there's anything after the command
+            for i in index + 3..input.len() {
+                if input[i] != b' ' && input[i] != b'_' && input[i] != b'\t' {
+                    return CommandResult::Error(
+                        "Invalid characters after command!".to_string(),
+                        i,
+                    );
+                }
+            }
+            let dms = num2dms(&state.prev_result, state);
+            for block in dms {
+                print!("{}", block);
+            }
+            CommandResult::Success("".to_string())
+        }
         s if s.eq_ignore_ascii_case(b"help") => {
             let help_text = get_help_text(&state);
             for line in help_text {
@@ -2633,6 +2682,13 @@ fn token2num(token: &Token, state: &mut BasecalcState) -> Complex {
         'E' => Complex::with_val(state.precision, Float::with_val(state.precision, 1).exp()),
         'G' => Complex::with_val(state.precision, rug::float::Constant::Euler),
         'p' => Complex::with_val(state.precision, rug::float::Constant::Pi),
+        'P' => {
+            let prec = state.precision;
+            let one = Float::with_val(prec, 1);
+            let five = Float::with_val(prec, 5);
+            let sqrt5 = five.sqrt();
+            Complex::with_val(prec, (one + sqrt5) / 2)
+        }
         'r' => generate_random(state.precision, &mut state.rand_state),
         'g' => gaussian_complex_random(state.precision, &mut state.rand_state),
         '&' => state.prev_result.clone(),
@@ -2715,6 +2771,57 @@ fn num2string(num: &Complex, state: &BasecalcState) -> Vec<ColoredString> {
             state.colours.comma.2,
         ));
         result.extend(format_part(num.imag(), state, false, false));
+        result.push(" ]".truecolor(
+            state.colours.brackets.0,
+            state.colours.brackets.1,
+            state.colours.brackets.2,
+        ));
+    }
+
+    result
+}
+/// Converts a complex number to a vector of DMS coloured strings for display
+///
+/// # Arguments
+/// * `num` - The complex number to convert
+/// * `base` - The current number base
+/// * `digits` - The number of digits to display
+/// * `colours` - The colour scheme for output formatting
+///
+/// # Returns
+/// * `Vec<ColoredString>` - A vector of coloured strings representing the number
+fn num2dms(num: &Complex, state: &BasecalcState) -> Vec<ColoredString> {
+    let mut result = Vec::new();
+
+    if num.real().is_nan()
+        || num.imag().is_nan()
+        || num.real().is_infinite()
+        || num.imag().is_infinite()
+    {
+        result.push("NaN".truecolor(
+            state.colours.nan.0,
+            state.colours.nan.1,
+            state.colours.nan.2,
+        ));
+        return result;
+    }
+
+    if num.imag().is_zero() {
+        result.push(" ".normal());
+        result.extend(format_dms(num.real(), state, true, true));
+    } else {
+        result.push("[".truecolor(
+            state.colours.brackets.0,
+            state.colours.brackets.1,
+            state.colours.brackets.2,
+        ));
+        result.extend(format_dms(num.real(), state, true, false));
+        result.push(" ,".truecolor(
+            state.colours.comma.0,
+            state.colours.comma.1,
+            state.colours.comma.2,
+        ));
+        result.extend(format_dms(num.imag(), state, false, false));
         result.push(" ]".truecolor(
             state.colours.brackets.0,
             state.colours.brackets.1,
@@ -2965,6 +3072,276 @@ fn format_part(
             } else {
                 let mut exponent = " ".to_owned();
                 exponent.push_str(&format_int(decimal_place as usize, state.base as usize));
+                result.push(exponent.truecolor(
+                    state.colours.exponent.0,
+                    state.colours.exponent.1,
+                    state.colours.exponent.2,
+                ));
+            }
+        }
+    }
+    result
+}
+/// Formats a part of a complex number (real or imaginary) as a vector of coloured strings
+///
+/// # Arguments
+/// * `num` - The float number to format
+/// * `base` - The current number base
+/// * `num_digits` - The number of digits to display
+/// * `colours` - The colour scheme for output formatting
+/// * `is_real` - Whether this is the real part of a complex number
+/// * `is_lone` - Whether this is a standalone number (not part of a complex number)
+///
+/// # Returns
+/// * `Vec<ColoredString>` - A vector of coloured strings representing the formatted DMS part
+fn format_dms(
+    num: &rug::Float,
+    state: &BasecalcState,
+    is_real: bool,
+    is_lone: bool,
+) -> Vec<ColoredString> {
+    let mut result = Vec::new();
+
+    if num.is_zero() {
+        result.push(" ".normal());
+        result.push("Zil".truecolor(
+            state.colours.lone_integer.0,
+            state.colours.lone_integer.1,
+            state.colours.lone_integer.2,
+        ));
+        result.push(".".truecolor(
+            state.colours.decimal.0,
+            state.colours.decimal.1,
+            state.colours.decimal.2,
+        ));
+        return result;
+    }
+    if num.is_nan() || num.is_infinite() {
+        result.push("NaN".truecolor(
+            state.colours.nan.0,
+            state.colours.nan.1,
+            state.colours.nan.2,
+        ));
+        return result;
+    }
+
+    let is_positive = num.is_sign_positive();
+    if is_positive {
+        result.push(" ".normal());
+    } else {
+        result.push("-".truecolor(
+            state.colours.sign.0,
+            state.colours.sign.1,
+            state.colours.sign.2,
+        ));
+    }
+
+    let mut num_abs = num.clone().abs();
+    let mut decimal_place = (num_abs.clone().log2() / (Float::with_val(num.prec(), 12)).log2())
+        .floor()
+        .to_f64() as isize;
+    num_abs = num_abs / (Float::with_val(num.prec(), 12)).pow(decimal_place);
+    num_abs += (Float::with_val(num.prec(), 12)).pow(-(state.digits as isize - 1)) / 2;
+    if num_abs > 12 {
+        num_abs = num.clone().abs();
+        decimal_place += 1;
+        num_abs = num_abs / (Float::with_val(num.prec(), 12)).pow(decimal_place);
+        num_abs += (Float::with_val(num.prec(), 12)).pow(-(state.digits as isize - 1)) / 2;
+    }
+
+    let mut integer_part = String::new();
+    let mut decimal = false;
+    let mut place = 0;
+    let mut offset = place as isize - decimal_place;
+    while offset <= 0 && place < state.digits {
+        place += 1;
+        let digit: u8 = num_abs.clone().floor().cast();
+        num_abs = num_abs - digit;
+        num_abs *= 12;
+        let name = match digit {
+            0 => "Zil",
+            1 => "Zila",
+            2 => "Zilor",
+            3 => "Ter",
+            4 => "Tera",
+            5 => "Teror",
+            6 => "Lun",
+            7 => "Luna",
+            8 => "Lunor",
+            9 => "Stel",
+            10 => "Stela",
+            11 => "Stelor",
+            _ => "NaN",
+        };
+        integer_part.extend(name.chars());
+        offset = place as isize - decimal_place;
+        if offset.rem_euc(3) == 1 && offset != 1 {
+            //&& place != num_digits - 1
+            integer_part.push(' ')
+        }
+    }
+    if offset == 1 {
+        decimal = true;
+    }
+    let mut fractional_part = String::new();
+    while offset > 0 && place < state.digits {
+        place += 1;
+        let digit: u8 = num_abs.clone().floor().cast();
+        num_abs = num_abs - digit;
+        num_abs *= 12;
+        let name = match digit {
+            0 => "Zil",
+            1 => "Zila",
+            2 => "Zilor",
+            3 => "Ter",
+            4 => "Tera",
+            5 => "Teror",
+            6 => "Lun",
+            7 => "Luna",
+            8 => "Lunor",
+            9 => "Stel",
+            10 => "Stela",
+            11 => "Stelor",
+            _ => "NaN",
+        };
+        fractional_part.extend(name.chars());
+        offset = place as isize - decimal_place;
+        if offset.rem_euc(3) == 1 {
+            //} && place != num_digits - 1 {
+            fractional_part.push(' ')
+        }
+    }
+    let (int_colour, frac_colour) = if is_lone {
+        (state.colours.lone_integer, state.colours.lone_fraction)
+    } else if is_real {
+        (state.colours.real_integer, state.colours.real_fraction)
+    } else {
+        (
+            state.colours.imaginary_integer,
+            state.colours.imaginary_fraction,
+        )
+    };
+    let prec = num_abs.prec();
+    let tilde =
+        (num_abs * Float::with_val(prec, 2) - Float::with_val(prec, 12)).abs() > 2f64.pow(-16);
+    if decimal {
+        if integer_part.is_empty() {
+            result.push("Zil".truecolor(int_colour.0, int_colour.1, int_colour.2));
+        } else {
+            result.push(integer_part.truecolor(int_colour.0, int_colour.1, int_colour.2));
+        }
+        result.push(".".truecolor(
+            state.colours.decimal.0,
+            state.colours.decimal.1,
+            state.colours.decimal.2,
+        ));
+        result.push(trim_zeros(fractional_part).truecolor(
+            frac_colour.0,
+            frac_colour.1,
+            frac_colour.2,
+        ));
+        if tilde {
+            result.push("~".truecolor(
+                state.colours.tilde.0,
+                state.colours.tilde.1,
+                state.colours.tilde.2,
+            ));
+        } else {
+            result.push(" ".normal());
+        }
+    } else {
+        if integer_part.is_empty() {
+            let mut number = trim_zeros(fractional_part);
+            let first = number.as_bytes()[0];
+            let is_space = first == b' ';
+            if is_space {
+                let mut new_number = "".to_owned();
+                new_number.push(number.as_bytes()[1] as char);
+                new_number.push('.');
+                new_number.push_str(number.split_at(2).1);
+                number = new_number;
+            } else {
+                let mut new_number = "".to_owned();
+                new_number.push(first as char);
+                new_number.push('.');
+                new_number.push_str(number.split_at(1).1);
+                number = new_number;
+            }
+            result.push(number.truecolor(frac_colour.0, frac_colour.1, frac_colour.2));
+            if tilde {
+                result.push("~".truecolor(
+                    state.colours.tilde.0,
+                    state.colours.tilde.1,
+                    state.colours.tilde.2,
+                ));
+            } else {
+                result.push(" ".normal());
+            }
+            result.push(" :".truecolor(
+                state.colours.colon.0,
+                state.colours.colon.1,
+                state.colours.colon.2,
+            ));
+            if decimal_place < 0 {
+                let mut exponent = "-".to_owned();
+                exponent.push_str(&format_int((-decimal_place) as usize, 12 as usize));
+                result.push(exponent.truecolor(
+                    state.colours.exponent.0,
+                    state.colours.exponent.1,
+                    state.colours.exponent.2,
+                ));
+            } else {
+                let mut exponent = " ".to_owned();
+                exponent.push_str(&format_int(decimal_place as usize, 12 as usize));
+                result.push(exponent.truecolor(
+                    state.colours.exponent.0,
+                    state.colours.exponent.1,
+                    state.colours.exponent.2,
+                ));
+            }
+        } else {
+            let mut number = trim_zeros(integer_part);
+            let first = number.as_bytes()[0];
+            let is_space = first == b' ';
+            if is_space {
+                let mut new_number = "".to_owned();
+                new_number.push(number.as_bytes()[1] as char);
+                new_number.push('.');
+                new_number.push_str(number.split_at(2).1);
+                number = new_number;
+            } else {
+                let mut new_number = "".to_owned();
+                new_number.push(first as char);
+                new_number.push('.');
+                new_number.push_str(number.split_at(1).1);
+                number = new_number;
+            }
+            result.push(number.truecolor(int_colour.0, int_colour.1, int_colour.2));
+            if tilde {
+                result.push("~".truecolor(
+                    state.colours.tilde.0,
+                    state.colours.tilde.1,
+                    state.colours.tilde.2,
+                ));
+            } else {
+                result.push(" ".normal());
+            }
+            result.push(" :".truecolor(
+                state.colours.colon.0,
+                state.colours.colon.1,
+                state.colours.colon.2,
+            ));
+            if decimal_place < 0 {
+                let mut exponent = "-".to_owned();
+                exponent.push_str(&format_int((-decimal_place) as usize, 12 as usize));
+                result.push(exponent.truecolor(
+                    state.colours.exponent.0,
+                    state.colours.exponent.1,
+                    state.colours.exponent.2,
+                ));
+            } else {
+                let mut exponent = " ".to_owned();
+                exponent.push_str(&format_int(decimal_place as usize, 12 as usize));
                 result.push(exponent.truecolor(
                     state.colours.exponent.0,
                     state.colours.exponent.1,
