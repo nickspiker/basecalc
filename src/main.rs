@@ -2043,9 +2043,14 @@ fn sign(z: &Complex) -> Complex {
 /// * `Err((String, usize))` - An error message and the position of the error
 fn parse_constant(
     input: &[u8],
-    index: usize,
+    mut index: usize,
     state: &mut BasecalcState,
 ) -> Result<(Token, usize), (String, usize)> {
+    // Skip leading whitespace
+    while index < input.len() && (input[index] == b' ' || input[index] == b'_' || input[index] == b'\t') {
+        index += 1;
+    }
+
     // First check for built-in constants
     for &(name, op, _desc) in &CONSTANTS {
         if input[index..]
@@ -2063,17 +2068,30 @@ fn parse_constant(
     }
 
     // Then check if this is a variable reference
-    if input[index] == b'@' {
+    if index < input.len() && input[index] == b'@' {
         let mut var_name = String::new();
         let mut curr_index = index + 1;
         
-        // Parse variable name
+        // Skip whitespace after @
+        while curr_index < input.len() && (input[curr_index] == b' ' || input[curr_index] == b'_' || input[curr_index] == b'\t') {
+            curr_index += 1;
+        }
+        
+        // Parse variable name, allowing whitespace between characters
         while curr_index < input.len() {
             let c = input[curr_index];
-            if !c.is_ascii_alphanumeric() && c != b'_' {
+            
+            // Skip whitespace within variable name
+            if c == b' ' || c == b'_' || c == b'\t' {
+                curr_index += 1;
+                continue;
+            }
+            
+            if !c.is_ascii_alphanumeric() {
                 break;
             }
-            var_name.push(c as char);
+            
+            var_name.push(c.to_ascii_lowercase() as char);
             curr_index += 1;
         }
 
@@ -2081,8 +2099,13 @@ fn parse_constant(
             return Err(("Invalid variable name!".to_string(), index));
         }
 
+        // Skip whitespace after variable name
+        while curr_index < input.len() && (input[curr_index] == b' ' || input[curr_index] == b'_' || input[curr_index] == b'\t') {
+            curr_index += 1;
+        }
+
         // Look for existing variable
-        if let Some(pos) = state.variables.iter().position(|v| v.name == var_name) {
+        if let Some(pos) = state.variables.iter().position(|v| v.name.to_ascii_lowercase() == var_name) {
             return Ok((
                 Token {
                     operator: 'v',
@@ -2095,14 +2118,14 @@ fn parse_constant(
 
         // Look ahead for assignment
         let mut look_ahead = curr_index;
-        while look_ahead < input.len() && input[look_ahead].is_ascii_whitespace() {
+        while look_ahead < input.len() && (input[look_ahead] == b' ' || input[look_ahead] == b'_' || input[look_ahead] == b'\t') {
             look_ahead += 1;
         }
 
         if look_ahead < input.len() && input[look_ahead] == b'=' {
             // This is an assignment - create new variable
             state.variables.push(Variable {
-                name: var_name,
+                name: var_name,  // Already lowercase from parsing
                 value: Complex::with_val(state.precision, 0),
             });
             return Ok((
