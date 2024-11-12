@@ -20,14 +20,14 @@
 // - Easy to make transcription errors
 // - Can't easily verify steps against expected values
 // - No way to track transformations systematically
-// 
+//
 // 2. Features Needed:
 // - Variables/stack for intermediate values
 // - Way to mark verification points/assertions
 // - Record/replay sequences of operations
 // - Step-by-step comparison with reference implementations
 // - Debug mode to show precision loss at each step, encoding patterns and set precision/base
-// 
+//
 // 3. Specific Additions:
 // - Store/name intermediate calculations, present formatted command and output to user
 // - Compare results within epsilon
@@ -35,7 +35,7 @@
 // - Save/load common transformation sequences
 // - Built-in coordinate system transforms, int/float conversions, etc.
 // - All common operators should be defined and integrated
-// 
+//
 // 4. Syntax Suggestions:
 // - Store value: -> var_name
 // - Assert within epsilon: =~ expected_value
@@ -94,8 +94,16 @@ fn main() -> rustyline::Result<()> {
                     Ok(tokens) => {
                         match evaluate_tokens(&tokens, &mut state) {
                             Ok(result) => {
-                                let result_vec = num2string(&result, &state);
-                                state.prev_result = result;
+                                let result_vec = if let Some(var_idx) = result.assignment {
+                                    // For assignments, prepend the variable name
+                                    let mut vec = vec![format!("@{} = ", state.variables[var_idx].name)
+                                        .truecolor(state.colours.message.0, state.colours.message.1, state.colours.message.2)];
+                                    vec.extend(num2string(&result.value, &state));
+                                    vec
+                                } else {
+                                    num2string(&result.value, &state)
+                                };
+                                state.prev_result = result.value;
                                 for coloured_string in result_vec {
                                     print!("{}", coloured_string);
                                 }
@@ -103,11 +111,7 @@ fn main() -> rustyline::Result<()> {
                             }
                             Err(err) => println!(
                                 "{}",
-                                err.truecolor(
-                                    state.colours.error.0,
-                                    state.colours.error.1,
-                                    state.colours.error.2
-                                )
+                                err.truecolor(state.colours.error.0, state.colours.error.1, state.colours.error.2)
                             ),
                         }
 
@@ -884,6 +888,15 @@ fn parse_vsf(data: &[u8], pointer: &mut usize) -> Result<BasecalcState, std::io:
     state.debug = debug_flag;
     Ok(state)
 }
+struct EvalResult {
+    value: Complex,
+    assignment: Option<usize>, // Index of assigned variable, if this was an assignment
+}
+#[derive(Clone)]
+struct Variable {
+    name: String,
+    value: Complex,
+}
 #[derive(Clone)]
 struct BasecalcState {
     base: u8,
@@ -898,6 +911,7 @@ struct BasecalcState {
     rand_state: rand::RandState<'static>,
     prev_result: Complex,
     colours: RGBValues,
+    variables: Vec<Variable>,
 }
 
 impl BasecalcState {
@@ -936,6 +950,7 @@ impl BasecalcState {
                 nan: (0xc0, 0x0D, 0xfB),
                 message: (0x9E, 0x35, 0xe1),
             },
+            variables: Vec::new(),
         };
         state.set_precision();
         state.prev_result = Complex::with_val(state.precision, 0);
@@ -1253,7 +1268,7 @@ fn print_stylized_intro(colours: &RGBValues) {
             .bold()
     );
 }
-static OPERATORS: [(&str, char, u8, &str); 29] = [
+static OPERATORS: [(&str, char, u8, &str); 30] = [
     // Basic arithmetic
     ("+", '+', 2, "addition"),
     ("-", '-', 2, "subtraction"),
@@ -1290,7 +1305,7 @@ static OPERATORS: [(&str, char, u8, &str); 29] = [
     // Miscellaneous
     ("#sign", 'g', 1, "sign"),
     ("#erf", 'x', 1, "error function"),
-    // Commented out for potential future use
+    ("=", '=', 2, "assignment"),
     // ("#gamma", '!', 1, "gamma function"),
     // ("#max", 'M', 2, "maximum"),
     // ("#min", 'm', 2, "minimum"),
@@ -1332,6 +1347,7 @@ enum Precedence {
     Exponentiation,
     Unary,
     Parenthesis,
+    Assignment,
 }
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct Token {
@@ -1342,6 +1358,7 @@ struct Token {
     imaginary_integer: Vec<u8>,
     imaginary_fraction: Vec<u8>,
     sign: (bool, bool),
+    var_index: Option<usize>,
 }
 use std::fmt;
 impl fmt::Display for Token {
@@ -1395,6 +1412,7 @@ impl Token {
             imaginary_integer: Vec::new(),
             imaginary_fraction: Vec::new(),
             sign: (false, false),
+            var_index: None,
         }
     }
 }
@@ -1418,6 +1436,19 @@ impl Modulus for Complex {
         Complex::with_val(self.prec(), (real, imaginary))
     }
 }
+/// Tokenizes the input string into a vector of Tokens
+///
+/// # Arguments
+/// * `input_str` - The input string to tokenize
+/// * `base` - The current number base
+/// * `precision` - The current precision for calculations
+/// * `digits` - The number of digits to display in results
+/// * `radians` - Whether to use radians for trigonometric functions
+/// * `colours` - The colour scheme for output formatting
+///
+/// # Returns
+/// * `Ok(Vec<Token>)` - A vector of tokens if successful
+/// * `Err((String, usize))` - An error message and the position of the error
 /// Tokenizes the input string into a vector of Tokens
 ///
 /// # Arguments
@@ -1505,7 +1536,7 @@ fn tokenize(input_str: &str, state: &mut BasecalcState) -> Result<Vec<Token>, (S
         }
         if expect_number {
             debug_println(&format!("Expecting a number or constant"));
-            match parse_constant(input, index) {
+            match parse_constant(input, index, state) {
                 Ok((token, new_index)) => {
                     debug_println(&format!("Parsed constant: {}", token));
                     tokens.push(token);
@@ -1607,103 +1638,161 @@ fn tokenize(input_str: &str, state: &mut BasecalcState) -> Result<Vec<Token>, (S
 /// # Returns
 /// * `Ok(Complex)` - The result of the evaluation as a complex number
 /// * `Err(String)` - An error message if evaluation fails
-fn evaluate_tokens(tokens: &[Token], state: &mut BasecalcState) -> Result<Complex, String> {
+fn evaluate_tokens(tokens: &[Token], state: &mut BasecalcState) -> Result<EvalResult, String> {
     debug_println("\nEvaluating tokens:");
-    let mut output_queue: Vec<Complex> = Vec::new();
-    let mut operator_stack: Vec<char> = Vec::new();
 
-    for token in tokens {
-        debug_println(&format!("Processing token: {}", token));
-        match token.operands {
-            0 => {
-                // Number or constant
-                let mut value = token2num(token, state);
-                debug_println(&format!("Processing number: {}", value));
+    // Check for variable assignment pattern (var = expr)
+    if tokens.len() >= 2 && tokens[0].operator == 'v' && tokens[1].operator == '=' {
+        // Get variable name and index
+        let var_index = tokens[0].var_index.ok_or("Invalid variable reference")?;
 
-                // Apply all stacked unary operators
-                while let Some(&op) = operator_stack.last() {
-                    if get_precedence(op) == Precedence::Unary {
-                        debug_println(&format!("Applying stacked unary operator: {}", op));
-                        let operator = operator_stack.pop().unwrap();
-                        value = apply_unary_operator(operator, value, &state)?;
+        // Evaluate the right-hand side expression
+        let mut output_queue: Vec<Complex> = Vec::new();
+        let mut operator_stack: Vec<char> = Vec::new();
+
+        // Process tokens after the '=' sign
+        for token in &tokens[2..] {
+            match token.operands {
+                0 => {
+                    let mut value = token2num(token, state);
+                    while let Some(&op) = operator_stack.last() {
+                        if get_precedence(op) == Precedence::Unary {
+                            let operator = operator_stack.pop().unwrap();
+                            value = apply_unary_operator(operator, value, state)?;
+                        } else {
+                            break;
+                        }
+                    }
+                    output_queue.push(value);
+                }
+                1 => {
+                    if token.operator == '(' {
+                        operator_stack.push('(');
+                    } else if token.operator == ')' {
+                        while let Some(&op) = operator_stack.last() {
+                            if op == '(' {
+                                operator_stack.pop();
+                                break;
+                            }
+                            apply_operator(&mut output_queue, operator_stack.pop().unwrap(), state)?;
+                        }
                     } else {
-                        break;
+                        operator_stack.push(token.operator);
                     }
                 }
-
-                debug_println(&format!(
-                    "Pushed processed number to output queue: {}",
-                    value
-                ));
-                output_queue.push(value);
-            }
-            1 => {
-                // Unary operator or parenthesis
-                debug_println(&format!("Processing unary operator: {}", token.operator));
-                if token.operator == '(' {
-                    operator_stack.push('(');
-                    debug_println("Pushed opening parenthesis to stack");
-                } else if token.operator == ')' {
+                2 => {
                     while let Some(&op) = operator_stack.last() {
-                        if op == '(' {
-                            operator_stack.pop();
+                        if op == '(' || get_precedence(token.operator) > get_precedence(op) {
                             break;
                         }
                         apply_operator(&mut output_queue, operator_stack.pop().unwrap(), state)?;
                     }
-                    // Apply function if there's one immediately before the parenthesis
-                    if let Some(&op) = operator_stack.last() {
-                        if get_precedence(op) == Precedence::Unary {
-                            apply_operator(
-                                &mut output_queue,
-                                operator_stack.pop().unwrap(),
-                                state,
-                            )?;
-                        }
-                    }
-                } else {
-                    // Unary operator
-                    debug_println(&format!(
-                        "Pushed unary operator to stack: {}",
-                        token.operator
-                    ));
                     operator_stack.push(token.operator);
                 }
+                _ => return Err(format!("Invalid token: {}", token)),
             }
-            2 => {
-                // Binary operator
-                while let Some(&op) = operator_stack.last() {
-                    if op == '(' || get_precedence(token.operator) > get_precedence(op) {
-                        break;
+        }
+
+        while let Some(op) = operator_stack.pop() {
+            if op == '(' {
+                return Err("Mismatched parentheses".to_string());
+            }
+            apply_operator(&mut output_queue, op, state)?;
+        }
+
+        if output_queue.len() != 1 {
+            return Err("Invalid expression".to_string());
+        }
+
+        let result = output_queue.pop().unwrap();
+        state.variables[var_index].value = result.clone();
+        
+        Ok(EvalResult {
+            value: result,
+            assignment: Some(var_index)
+        })
+
+    } else {
+        // Regular expression evaluation (unchanged)
+        let mut output_queue: Vec<Complex> = Vec::new();
+        let mut operator_stack: Vec<char> = Vec::new();
+
+        for token in tokens {
+            debug_println(&format!("Processing token: {}", token));
+            match token.operands {
+                0 => {
+                    let mut value = token2num(token, state);
+                    debug_println(&format!("Processing number: {}", value));
+
+                    while let Some(&op) = operator_stack.last() {
+                        if get_precedence(op) == Precedence::Unary {
+                            debug_println(&format!("Applying stacked unary operator: {}", op));
+                            let operator = operator_stack.pop().unwrap();
+                            value = apply_unary_operator(operator, value, state)?;
+                        } else {
+                            break;
+                        }
                     }
-                    apply_operator(&mut output_queue, operator_stack.pop().unwrap(), state)?;
+
+                    debug_println(&format!("Pushed processed number to output queue: {}", value));
+                    output_queue.push(value);
                 }
-                operator_stack.push(token.operator);
-                debug_println(&format!(
-                    "Pushed binary operator to stack: {}",
-                    token.operator
-                ));
+                1 => {
+                    debug_println(&format!("Processing unary operator: {}", token.operator));
+                    if token.operator == '(' {
+                        operator_stack.push('(');
+                        debug_println("Pushed opening parenthesis to stack");
+                    } else if token.operator == ')' {
+                        while let Some(&op) = operator_stack.last() {
+                            if op == '(' {
+                                operator_stack.pop();
+                                break;
+                            }
+                            apply_operator(&mut output_queue, operator_stack.pop().unwrap(), state)?;
+                        }
+                        if let Some(&op) = operator_stack.last() {
+                            if get_precedence(op) == Precedence::Unary {
+                                apply_operator(&mut output_queue, operator_stack.pop().unwrap(), state)?;
+                            }
+                        }
+                    } else {
+                        debug_println(&format!("Pushed unary operator to stack: {}", token.operator));
+                        operator_stack.push(token.operator);
+                    }
+                }
+                2 => {
+                    while let Some(&op) = operator_stack.last() {
+                        if op == '(' || get_precedence(token.operator) > get_precedence(op) {
+                            break;
+                        }
+                        apply_operator(&mut output_queue, operator_stack.pop().unwrap(), state)?;
+                    }
+                    operator_stack.push(token.operator);
+                    debug_println(&format!("Pushed binary operator to stack: {}", token.operator));
+                }
+                _ => return Err(format!("Invalid token: {}", token)),
             }
-            _ => return Err(format!("Invalid token: {}", token)),
+            debug_println(&format!("Output queue: {:?}", output_queue));
+            debug_println(&format!("Operator stack: {:?}", operator_stack));
         }
-        debug_println(&format!("Output queue: {:?}", output_queue));
-        debug_println(&format!("Operator stack: {:?}", operator_stack));
-    }
 
-    // Apply remaining operators
-    while let Some(op) = operator_stack.pop() {
-        if op == '(' {
-            return Err("Mismatched parentheses".to_string());
+        while let Some(op) = operator_stack.pop() {
+            if op == '(' {
+                return Err("Mismatched parentheses".to_string());
+            }
+            debug_println(&format!("Applying remaining operator: {}", op));
+            apply_operator(&mut output_queue, op, state)?;
         }
-        debug_println(&format!("Applying remaining operator: {}", op));
-        apply_operator(&mut output_queue, op, state)?;
-    }
 
-    if output_queue.len() != 1 {
-        return Err("Invalid expression".to_string());
-    }
+        if output_queue.len() != 1 {
+            return Err("Invalid expression".to_string());
+        }
 
-    Ok(output_queue.pop().unwrap())
+        Ok(EvalResult {
+            value: output_queue.pop().unwrap(),
+            assignment: None
+        })
+    }
 }
 fn apply_operator(
     output_queue: &mut Vec<Complex>,
@@ -1734,6 +1823,7 @@ fn get_precedence(op: char) -> Precedence {
         'n' | 'a' | 'O' | 'o' | 'S' | 'T' | 'c' | 'f' | 'F' | 'i' | 'I' | 'l' | 'L' | 'e' | 'r'
         | 'g' | 's' | 'q' | 't' | 'A' => Precedence::Unary,
         '(' | ')' => Precedence::Parenthesis,
+        '=' => Precedence::Assignment,
         _ => Precedence::Addition, // Default to lowest precedence for unknown operators
     }
 }
@@ -1951,7 +2041,12 @@ fn sign(z: &Complex) -> Complex {
 /// # Returns
 /// * `Ok((Token, usize))` - The parsed constant token and the new index
 /// * `Err((String, usize))` - An error message and the position of the error
-fn parse_constant(input: &[u8], index: usize) -> Result<(Token, usize), (String, usize)> {
+fn parse_constant(
+    input: &[u8],
+    index: usize,
+    state: &mut BasecalcState,
+) -> Result<(Token, usize), (String, usize)> {
+    // First check for built-in constants
     for &(name, op, _desc) in &CONSTANTS {
         if input[index..]
             .to_ascii_lowercase()
@@ -1965,6 +2060,63 @@ fn parse_constant(input: &[u8], index: usize) -> Result<(Token, usize), (String,
                 index + name.len(),
             ));
         }
+    }
+
+    // Then check if this is a variable reference
+    if input[index] == b'@' {
+        let mut var_name = String::new();
+        let mut curr_index = index + 1;
+        
+        // Parse variable name
+        while curr_index < input.len() {
+            let c = input[curr_index];
+            if !c.is_ascii_alphanumeric() && c != b'_' {
+                break;
+            }
+            var_name.push(c as char);
+            curr_index += 1;
+        }
+
+        if var_name.is_empty() {
+            return Err(("Invalid variable name!".to_string(), index));
+        }
+
+        // Look for existing variable
+        if let Some(pos) = state.variables.iter().position(|v| v.name == var_name) {
+            return Ok((
+                Token {
+                    operator: 'v',
+                    var_index: Some(pos),
+                    ..Token::new()
+                },
+                curr_index,
+            ));
+        }
+
+        // Look ahead for assignment
+        let mut look_ahead = curr_index;
+        while look_ahead < input.len() && input[look_ahead].is_ascii_whitespace() {
+            look_ahead += 1;
+        }
+
+        if look_ahead < input.len() && input[look_ahead] == b'=' {
+            // This is an assignment - create new variable
+            state.variables.push(Variable {
+                name: var_name,
+                value: Complex::with_val(state.precision, 0),
+            });
+            return Ok((
+                Token {
+                    operator: 'v',
+                    var_index: Some(state.variables.len() - 1),
+                    ..Token::new()
+                },
+                curr_index,
+            ));
+        }
+
+        // Variable doesn't exist and this isn't an assignment
+        return Err((format!("Undefined variable '{}'!", var_name), index));
     }
 
     Err((format!("Invalid constant!"), index))
@@ -2159,6 +2311,14 @@ fn parse_operator(input: &[u8], mut index: usize) -> (Token, usize) {
     let mut token = Token::new();
 
     if index < input.len() {
+        // First check for assignment operator
+        if input[index] == b'=' {
+            token.operator = '=';
+            token.operands = 2;
+            return (token, index + 1);
+        }
+
+        // Then check for other operators
         for &(op_str, op_char, operands, _) in &OPERATORS {
             if input[index..]
                 .to_ascii_lowercase()
@@ -2540,6 +2700,33 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
         local_state.colours.lone_fraction.2,
     ));
 
+    // Variable assignment and usage
+    help_text.push("\nVariables:\n".truecolor(
+        local_state.colours.brackets.0,
+        local_state.colours.brackets.1,
+        local_state.colours.brackets.2,
+    ));
+    help_text.push("  @name=value  ".truecolor(
+        local_state.colours.lone_integer.0,
+        local_state.colours.lone_integer.1,
+        local_state.colours.lone_integer.2,
+    ));
+    help_text.push("- Assign value to variable\n".truecolor(
+        local_state.colours.lone_fraction.0,
+        local_state.colours.lone_fraction.1,
+        local_state.colours.lone_fraction.2,
+    ));
+    help_text.push("  @name        ".truecolor(
+        local_state.colours.lone_integer.0,
+        local_state.colours.lone_integer.1,
+        local_state.colours.lone_integer.2,
+    ));
+    help_text.push("- Use variable in expression\n".truecolor(
+        local_state.colours.lone_fraction.0,
+        local_state.colours.lone_fraction.1,
+        local_state.colours.lone_fraction.2,
+    ));
+
     // Examples
     help_text.push("\nExamples:\n".truecolor(
         local_state.colours.brackets.0,
@@ -2564,12 +2751,15 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
         ("& + 1", "The Answer plus one. For those who always need a little extra."),
         ("@pi * 2", "Once around the universe."),
         ("#cos(2*@pi)", "Whoa, we've gone full circle!"),
+        ("@e$@e", "Natural log of e - as natural as it gets!"),
         ("@rand", "Random number: perfect for simulating quantum improbability."),
         ("@grand", "Gaussian random: for when your probability needs to be normally distributed."),
         ("#floor(3.14159)", "Rounding down: because sometimes you need to be grounded."),
-        ("17%5", "Modulus: for when you need to know how many Babel fish are left."),
+        ("@numfish=17%5", "Modulus: for when you need to know how many Babel fish are left."),
+        ("#ceil(@numfish$2)", "How many bits needed for storing the number of fish? Let's find out!"),
         (":base G", "Hexadecimal: for the really hoopy froods."),
         ("FF", "The darkest shade in hex, or just 255 for the less cool."),
+        ("FF$F", "And in nibbles, that's 2!"),
         (":base A", "And we're back to decimal. What a journey!"),
         ("&", "See?, 255.")
     ];
@@ -2613,12 +2803,23 @@ Remember, DON'T PANIC! With basecalc, you're always just a few keystrokes away f
                     match evaluate_tokens(&tokens, &mut local_state) {
                         Ok(result) => {
                             help_text.push("  ".normal());
-                            let result_string = num2string(&result, &local_state);
+                            let result_string = if let Some(var_idx) = result.assignment {
+                                let mut vec = vec![format!("@{} = ", local_state.variables[var_idx].name)
+                                    .truecolor(
+                                        local_state.colours.message.0,
+                                        local_state.colours.message.1,
+                                        local_state.colours.message.2,
+                                    )];
+                                vec.extend(num2string(&result.value, &local_state));
+                                vec
+                            } else {
+                                num2string(&result.value, &local_state)
+                            };
                             for part in result_string {
                                 help_text.push(part);
                             }
                             help_text.push("\n".normal());
-                            local_state.prev_result = result; // Update local_prev_result for & usage
+                            local_state.prev_result = result.value; // Update local_prev_result for & usage
                         }
                         Err(err) => {
                             help_text.push(format!("  Error: {}\n", err).truecolor(
@@ -2672,13 +2873,21 @@ fn gaussian_complex_random(precision: u32, rand_state: &mut rug::rand::RandState
 ///
 /// # Arguments
 /// * `token` - The token to convert
-/// * `base` - The current number base
-/// * `precision` - The precision for the resulting number
+/// * `state` - The current calculator state
 ///
 /// # Returns
 /// * `Complex` - The complex number representation of the token
 fn token2num(token: &Token, state: &mut BasecalcState) -> Complex {
     match token.operator {
+        // User-defined constants
+        'v' => {
+            if let Some(index) = token.var_index {
+                state.variables[index].value.clone()
+            } else {
+                Complex::with_val(state.precision, 0)
+            }
+        }
+        // Built-in constants
         'E' => Complex::with_val(state.precision, Float::with_val(state.precision, 1).exp()),
         'G' => Complex::with_val(state.precision, rug::float::Constant::Euler),
         'p' => Complex::with_val(state.precision, rug::float::Constant::Pi),
@@ -2692,6 +2901,8 @@ fn token2num(token: &Token, state: &mut BasecalcState) -> Complex {
         'r' => generate_random(state.precision, &mut state.rand_state),
         'g' => gaussian_complex_random(state.precision, &mut state.rand_state),
         '&' => state.prev_result.clone(),
+
+        // Regular numbers
         _ => {
             let mut real_int = Float::with_val(state.precision, 0);
             for &digit in &token.real_integer {
@@ -3556,6 +3767,8 @@ fn run_tests() -> (usize, usize) {
         ),
         // Complex nested functions with constants
         ("#sin#cos#tan3^2+1", "  1.P5N M5R ZCQ 6RZ NW6 FIS 23Y NV~"),
+        ("@1=4+1", "@1 =   5."),
+        ("5/@1", "  1."),
     ];
     let mut passed = 0;
     let total = tests.len();
@@ -3564,9 +3777,16 @@ fn run_tests() -> (usize, usize) {
 
         let (coloured_result, result) = match tokenize(input, &mut state) {
             Ok(tokens) => match evaluate_tokens(&tokens, &mut state) {
-                Ok(eval_value) => {
-                    let coloured_vec = num2string(&eval_value, &state);
-                    state.prev_result = eval_value;
+                Ok(result) => {
+                    let coloured_vec = if let Some(var_idx) = result.assignment {
+                        let mut vec = vec![format!("@{} = ", state.variables[var_idx].name)
+                            .truecolor(state.colours.message.0, state.colours.message.1, state.colours.message.2)];
+                        vec.extend(num2string(&result.value, &state));
+                        vec
+                    } else {
+                        num2string(&result.value, &state)
+                    };
+                    state.prev_result = result.value;
                     (coloured_vec.clone(), coloured_vec_to_string(&coloured_vec))
                 }
                 Err(err) => (vec![err.red()], err),
