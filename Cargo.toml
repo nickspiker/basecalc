@@ -1,0 +1,18 @@
+[package]
+name = "basecalc"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+az = "1.2.1"
+blake3 = "1.5.0"
+chrono = "0.4.31"
+colored = "2.1.0"
+dirs = "5.0.1"
+rand = "0.8.5"
+rug = { version = "1.28.0", features = ["complex","integer"] }
+rustyline = "12.0.0"
+termion = "4.0.2"
+vsf = "0.1.2"
