@@ -1,9 +1,15 @@
 [package]
 name = "basecalc"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Arbitrary-precision multi-base scientific calculator"
+authors = ["Nick Spiker <fractaldecoder@proton.me>"]
+license = "GPL-3.0"
+keywords = ["calculator", "arbitrary-precision", "math", "hexadecimal", "dozenal"]
+categories = ["mathematics", "command-line-utilities"]
+readme = "README.md"
+repository = "https://github.com/nickspiker/basecalc"
+homepage = "https://github.com/nickspiker/basecalc"
 
 [dependencies]
 az = "1.2.1"
