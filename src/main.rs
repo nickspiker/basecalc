@@ -1310,11 +1310,12 @@ static OPERATORS: [(&str, char, u8, &str); 30] = [
     // ("#max", 'M', 2, "maximum"),
     // ("#min", 'm', 2, "minimum"),
 ];
-static CONSTANTS: [(&str, char, &str); 7] = [
+static CONSTANTS: [(&str, char, &str); 8] = [
     ("@pi", 'p', "Pi"),
     ("@phi", 'P', "Golden ratio"),
     ("@e", 'E', "Euler's number"),
     ("@gamma", 'G', "Euler-Mascheroni constant"),
+    ("@catalan", 'C', "Catalan's constant"),
     ("@rand", 'r', "Random number between 0 and 1"),
     ("@grand", 'g', "Gaussian random number"),
     ("&", '&', "Previous result"),
@@ -2913,6 +2914,7 @@ fn token2num(token: &Token, state: &mut BasecalcState) -> Complex {
         // Built-in constants
         'E' => Complex::with_val(state.precision, Float::with_val(state.precision, 1).exp()),
         'G' => Complex::with_val(state.precision, rug::float::Constant::Euler),
+        'C' => Complex::with_val(state.precision, rug::float::Constant::Catalan),
         'p' => Complex::with_val(state.precision, rug::float::Constant::Pi),
         'P' => {
             let prec = state.precision;
