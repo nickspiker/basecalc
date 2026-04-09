@@ -1276,7 +1276,7 @@ static OPERATORS: [(&str, char, u8, &str); 30] = [
     ("/", '/', 2, "division"),
     ("^", '^', 2, "exponentiation"),
     ("%", '%', 2, "modulus"),
-    ("$", '$', 2, "log and base logarithm"),
+    ("$", '$', 2, "logarithm (number$base = log base of number)"),
     // Parentheses
     ("(", '(', 1, "left parenthesis"),
     (")", ')', 1, "right parenthesis"),
