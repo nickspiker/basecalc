@@ -31,7 +31,7 @@
 // 3. Specific Additions:
 // - Store/name intermediate calculations, present formatted command and output to user
 // - Compare results within epsilon
-// - Track precision loss through operation chains
+// - Track precision loss thru operation chains
 // - Save/load common transformation sequences
 // - Built-in coordinate system transforms, int/float conversions, etc.
 // - All common operators should be defined and integrated
