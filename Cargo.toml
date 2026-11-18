@@ -11,14 +11,30 @@ readme = "README.md"
 repository = "https://github.com/nickspiker/basecalc"
 homepage = "https://github.com/nickspiker/basecalc"
 
+[lib]
+name = "basecalc"
+path = "src/lib.rs"
+
+# The terminal front; a front of another kind (the ferros kist) takes the engine alone with default-features = false.
+[[bin]]
+name = "basecalc"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:blake3", "dep:chrono", "dep:colored", "dep:dirs", "dep:rand", "dep:rustyline", "dep:termion", "dep:vsf"]
+
 [dependencies]
+# The engine: GMP, MPFR and MPC thru rug.
 az = "1.2.1"
-blake3 = "1.5.0"
-chrono = "0.4.31"
-colored = "2.1.0"
-dirs = "5.0.1"
-rand = "0.8.5"
 rug = { version = "1.28.0", features = ["complex","integer"] }
-rustyline = "12.0.0"
-termion = "4.0.2"
-vsf = "0.1.2"
+# The terminal front.
+blake3 = { version = "1.5.0", optional = true }
+chrono = { version = "0.4.31", optional = true }
+colored = { version = "2.1.0", optional = true }
+dirs = { version = "5.0.1", optional = true }
+rand = { version = "0.8.5", optional = true }
+rustyline = { version = "12.0.0", optional = true }
+termion = { version = "4.0.2", optional = true }
+vsf = { version = "0.1.2", optional = true }
